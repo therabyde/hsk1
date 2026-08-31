@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mandarin Chill 🍃 | Belajar HSK 1 Tanpa Stres & Tanpa Beban</title>
+  <meta name="description" content="Aplikasi micro-dosing belajar kosakata HSK 1 Mandarin yang santai, minimalis, dan khusus didesain untuk kamu yang takut atau benci menghafal Hanzi.">
+  
+  <!-- PWA Meta Tags & Manifest -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#5b9286">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Mandarin Chill">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Floating Ambient Background Orbs -->
+  <div class="ambient-bg">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <div class="app-container">
+
+    <!-- Top Navigation Header -->
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-icon">🍃</span>
+        <div class="brand-text">
+          <h1>Mandarin Chill</h1>
+          <p class="subtitle">HSK 1 • Mode Micro-Dosing Santai</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <!-- Audio Ambiance Toggle -->
+        <button id="ambiance-btn" class="icon-btn" title="Suara Lofi & Hujan Relaksasi" aria-label="Toggle Suara Ambiance">
+          <span class="btn-icon">🌧️</span>
+          <span class="btn-label">Lofi Rain</span>
+        </button>
+
+        <!-- Favorit Drawer Trigger -->
+        <button id="favorites-trigger" class="icon-btn" title="Lihat Kata Favorit" aria-label="Buka Kata Favorit">
+          <span class="btn-icon">⭐</span>
+          <span id="fav-count-badge" class="badge">0</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Daily Zen Micro Badge -->
+    <section class="zen-bar">
+      <div class="zen-pill">
+        <span class="zen-emoji">☕</span>
+        <span id="session-count">Kata ke-1 hari ini</span>
+        <span class="zen-separator">•</span>
+        <span class="zen-quote" id="zen-quote">Satu kata per waktu. Nggak usah buru-buru~</span>
+      </div>
+    </section>
+
+    <!-- MAIN CARD CONTAINER (Micro-Dosing: Strictly ONE card at a time) -->
+    <main class="flashcard-section">
+      
+      <!-- Loading State -->
+      <div id="loading-state" class="card-loader">
+        <div class="spinner"></div>
+        <p>Memuat kosakata santai dari GitHub...</p>
+        <span class="loading-sub">Zero stress loader 🍵</span>
+      </div>
+
+      <!-- Error State (Fallback) -->
+      <div id="error-state" class="card-error hidden">
+        <span class="error-icon">🌱</span>
+        <p>Koneksi santai sedang beristirahat. Kami menggunakan data offline aman!</p>
+        <button id="retry-btn" class="pill-btn secondary">Coba Muat Ulang</button>
+      </div>
+
+      <!-- Main Interactive Flashcard -->
+      <article id="flashcard" class="flashcard hidden" aria-live="polite">
+        
+        <!-- Top Badge & Tone Guide -->
+        <div class="card-header">
+          <span class="word-category" id="word-category">HSK 1</span>
+          <button id="fav-toggle-btn" class="fav-heart-btn" title="Simpan kata ini" aria-label="Simpan kata ke favorit">
+            <svg class="heart-icon" viewBox="0 0 24 24" width="24" height="24">
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- PRIMARY VIEW 1: PINYIN (PROMINENT FIRST - target user hates Hanzi) -->
+        <div class="pinyin-display">
+          <span id="card-pinyin" class="pinyin-text">nǐ hǎo</span>
+          <div class="speech-actions">
+            <button id="audio-speech-btn" class="speech-btn" title="Dengarkan pengucapan asli Mandarin" aria-label="Putar Suara">
+              <span class="speaker-icon">🔊</span>
+              <span class="speech-hint">Dengar</span>
+            </button>
+            <button id="voice-rec-btn" class="speech-btn record-btn" title="Coba ucapkan kata ini dalam Mandarin" aria-label="Coba Ucapkan">
+              <span class="speaker-icon" id="voice-btn-icon">🎙️</span>
+              <span class="speech-hint" id="voice-btn-label">Coba Ucapkan</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- PRIMARY VIEW 2: INDONESIAN MEANING (Blurred by default with .obscured) -->
+        <div class="meaning-display" id="meaning-display-container">
+          <div class="meaning-wrapper">
+            <h2 id="card-meaning" class="meaning-text obscured">Halo / Apa Kabar</h2>
+          </div>
+          <p id="card-hint" class="hint-text obscured">Salam paling dasar saat bertemu seseorang 🤝</p>
+        </div>
+
+        <!-- SPEECH RECOGNITION FEEDBACK BOX -->
+        <div id="speech-feedback-box" class="speech-feedback-box hidden">
+          <span id="speech-feedback-icon" class="feedback-icon">✨</span>
+          <p id="speech-feedback-text" class="feedback-text"></p>
+        </div>
+
+        <div class="card-divider"></div>
+
+        <!-- HANZI SECTION (Blurred by default with .obscured) -->
+        <div class="hanzi-disguise-section">
+          <div class="hanzi-privacy-wrapper" id="hanzi-privacy-wrapper">
+            <div id="hanzi-box" class="hanzi-box">
+              <span id="card-hanzi" class="hanzi-text obscured">你好</span>
+              <span class="hanzi-note">Karakter Hanzi (Abaikan kalau bikin stres!)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- SMALL INDIVIDUAL TOGGLE BUTTONS BAR -->
+        <div class="quick-toggles-bar">
+          <button id="toggle-meaning-btn" class="toggle-pill-btn" title="Tampilkan atau sembunyikan arti">
+            <span>👁️ Tampilkan/Sembunyikan Arti</span>
+          </button>
+          <button id="toggle-hanzi-btn" class="toggle-pill-btn" title="Tampilkan atau sembunyikan karakter Hanzi">
+            <span>👁️ Tampilkan/Sembunyikan Hanzi</span>
+          </button>
+        </div>
+
+        <!-- CARD FOOTER ACTIONS -->
+        <div class="card-footer">
+          <button id="repeat-card-btn" class="repeat-btn secondary-btn" title="Sembunyikan kembali semua jawaban pada kartu ini">
+            <span class="btn-main-text">🔑 Ulangi Kartu Ini</span>
+            <span class="btn-subtext">(Sembunyikan Semua)</span>
+          </button>
+          <button id="next-word-btn" class="next-btn primary-glow">
+            <span class="btn-main-text">Lanjut Santai ✨</span>
+            <span class="btn-subtext">(Kata Acak Selanjutnya)</span>
+          </button>
+        </div>
+
+      </article>
+    </main>
+
+    <!-- Bottom Reassuring Tips -->
+    <footer class="app-footer">
+      <div class="tip-card">
+        <span class="tip-icon">💡</span>
+        <p id="tip-text">Trik Santai: Ingat bunyinya (Pinyin) & maknanya dulu. Karakter Hanzi akan hafal sendiri tanpa dipaksa!</p>
+      </div>
+      <p class="copyright">Mandarin Chill • 100% Anti-Stres & Anti-Mengintimidasi • Dibuat dengan Cinta 🍵</p>
+    </footer>
+
+  </div>
+
+  <!-- MODAL / DRAWER FOR FAVORITE WORDS -->
+  <div id="fav-modal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>⭐ Kata Favorit Tersimpan</h3>
+        <button id="close-modal-btn" class="close-btn" aria-label="Tutup Modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="empty-fav-msg" class="empty-msg">Belum ada kata favorit. Klik tombol ⭐ pada flashcard untuk menyimpan kata yang kamu suka!</p>
+        <ul id="fav-list" class="fav-list"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification System -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="script.js"></script>
+  <!-- Service Worker Registration for PWA -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+          .then((reg) => {
+            console.log('Mandarin Chill Service Worker registered successfully:', reg.scope);
+          })
+          .catch((err) => {
+            console.warn('Mandarin Chill Service Worker registration failed:', err);
+          });
+      });
+    }
+  </script>
+</body>
+</html>

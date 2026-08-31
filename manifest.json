@@ -1,0 +1,24 @@
+{
+  "name": "Mandarin Chill",
+  "short_name": "Mandarin Chill",
+  "description": "Aplikasi micro-dosing HSK 1 santai & anti-stres tanpa hafalan paksaan",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f4f8f7",
+  "theme_color": "#5b9286",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
