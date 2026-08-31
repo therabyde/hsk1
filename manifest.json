@@ -1,6 +1,6 @@
 {
-  "name": "Mandarin Chill",
-  "short_name": "Mandarin Chill",
+  "name": "HSK 1 - Micro-Dosing Mode",
+  "short_name": "HSK 1",
   "description": "Aplikasi micro-dosing HSK 1 santai & anti-stres tanpa hafalan paksaan",
   "start_url": "./index.html",
   "display": "standalone",

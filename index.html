@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mandarin Chill 🍃 | Belajar HSK 1 Tanpa Stres & Tanpa Beban</title>
-  <meta name="description" content="Aplikasi micro-dosing belajar kosakata HSK 1 Mandarin yang santai, minimalis, dan khusus didesain untuk kamu yang takut atau benci menghafal Hanzi.">
+  <title>HSK 1 - Micro-Dosing Mode | Belajar Kosakata Tanpa Stres</title>
+  <meta name="description" content="Aplikasi micro-dosing belajar kosakata HSK 1 Mandarin yang santai, minimalis, dan dirancang untuk belajar 1 kata per waktu tanpa stres.">
   
   <!-- PWA Meta Tags & Manifest -->
   <link rel="manifest" href="manifest.json">
@@ -12,9 +12,12 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Mandarin Chill">
+  <meta name="apple-mobile-web-app-title" content="HSK 1 Micro-Dosing">
   <link rel="apple-touch-icon" href="icon-192.png">
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+
+  <!-- Hanzi Writer CDN Library -->
+  <script src="https://cdn.jsdelivr.net/npm/hanzi-writer@3.5/dist/hanzi-writer.min.js"></script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -37,16 +40,15 @@
       <div class="brand">
         <span class="brand-icon">🍃</span>
         <div class="brand-text">
-          <h1>Mandarin Chill</h1>
-          <p class="subtitle">HSK 1 • Mode Micro-Dosing Santai</p>
+          <h1>HSK 1 - Micro-Dosing Mode</h1>
+          <p class="subtitle">Belajar 1 Kata per Waktu</p>
         </div>
       </div>
 
       <div class="header-actions">
-        <!-- Audio Ambiance Toggle -->
-        <button id="ambiance-btn" class="icon-btn" title="Suara Lofi & Hujan Relaksasi" aria-label="Toggle Suara Ambiance">
-          <span class="btn-icon">🌧️</span>
-          <span class="btn-label">Lofi Rain</span>
+        <!-- Dark Mode Toggle Button -->
+        <button id="theme-toggle-btn" class="icon-btn" title="Ganti Mode Gelap/Terang" aria-label="Toggle Tema Gelap">
+          <span id="theme-icon" class="btn-icon">🌙</span>
         </button>
 
         <!-- Favorit Drawer Trigger -->
@@ -57,13 +59,15 @@
       </div>
     </header>
 
-    <!-- Daily Zen Micro Badge -->
+    <!-- Clean Stats Bar (Word Count & Day Streak) -->
     <section class="zen-bar">
       <div class="zen-pill">
         <span class="zen-emoji">☕</span>
         <span id="session-count">Kata ke-1 hari ini</span>
-        <span class="zen-separator">•</span>
-        <span class="zen-quote" id="zen-quote">Satu kata per waktu. Nggak usah buru-buru~</span>
+      </div>
+      <div class="zen-pill streak-pill">
+        <span class="zen-emoji">🔥</span>
+        <span id="streak-display"><strong id="streak-count">1</strong> Hari Streak</span>
       </div>
     </section>
 
@@ -73,21 +77,21 @@
       <!-- Loading State -->
       <div id="loading-state" class="card-loader">
         <div class="spinner"></div>
-        <p>Memuat kosakata santai dari GitHub...</p>
-        <span class="loading-sub">Zero stress loader 🍵</span>
+        <p>Memuat kosakata HSK 1 dari GitHub...</p>
+        <span class="loading-sub">Micro-dosing mode 🍵</span>
       </div>
 
       <!-- Error State (Fallback) -->
       <div id="error-state" class="card-error hidden">
         <span class="error-icon">🌱</span>
-        <p>Koneksi santai sedang beristirahat. Kami menggunakan data offline aman!</p>
+        <p>Koneksi sedang offline. Data kosakata lokal tetap aktif aman!</p>
         <button id="retry-btn" class="pill-btn secondary">Coba Muat Ulang</button>
       </div>
 
       <!-- Main Interactive Flashcard -->
       <article id="flashcard" class="flashcard hidden" aria-live="polite">
         
-        <!-- Top Badge & Tone Guide -->
+        <!-- Top Badge & Favorite -->
         <div class="card-header">
           <span class="word-category" id="word-category">HSK 1</span>
           <button id="fav-toggle-btn" class="fav-heart-btn" title="Simpan kata ini" aria-label="Simpan kata ke favorit">
@@ -97,7 +101,7 @@
           </button>
         </div>
 
-        <!-- PRIMARY VIEW 1: PINYIN (PROMINENT FIRST - target user hates Hanzi) -->
+        <!-- PRIMARY VIEW 1: PINYIN (PROMINENT FIRST) -->
         <div class="pinyin-display">
           <span id="card-pinyin" class="pinyin-text">nǐ hǎo</span>
           <div class="speech-actions">
@@ -115,9 +119,9 @@
         <!-- PRIMARY VIEW 2: INDONESIAN MEANING (Blurred by default with .obscured) -->
         <div class="meaning-display" id="meaning-display-container">
           <div class="meaning-wrapper">
-            <h2 id="card-meaning" class="meaning-text obscured">Halo / Apa Kabar</h2>
+            <h2 id="card-meaning" class="meaning-text obscured" title="Klik untuk tampilkan/sembunyikan">Halo / Apa Kabar</h2>
           </div>
-          <p id="card-hint" class="hint-text obscured">Salam paling dasar saat bertemu seseorang 🤝</p>
+          <p id="card-hint" class="hint-text obscured" title="Klik untuk tampilkan/sembunyikan">Salam paling dasar saat bertemu seseorang 🤝</p>
         </div>
 
         <!-- SPEECH RECOGNITION FEEDBACK BOX -->
@@ -131,29 +135,25 @@
         <!-- HANZI SECTION (Blurred by default with .obscured) -->
         <div class="hanzi-disguise-section">
           <div class="hanzi-privacy-wrapper" id="hanzi-privacy-wrapper">
-            <div id="hanzi-box" class="hanzi-box">
+            <div id="hanzi-box" class="hanzi-box" title="Klik untuk tampilkan/sembunyikan">
               <span id="card-hanzi" class="hanzi-text obscured">你好</span>
-              <span class="hanzi-note">Karakter Hanzi (Abaikan kalau bikin stres!)</span>
+              <span class="hanzi-note">Karakter Hanzi (Abaikan jika belum ingin menghafal)</span>
             </div>
           </div>
         </div>
 
-        <!-- SMALL INDIVIDUAL TOGGLE BUTTONS BAR -->
+        <!-- PURE TOGGLE BUTTONS (ARTI & HANZI) -->
         <div class="quick-toggles-bar">
           <button id="toggle-meaning-btn" class="toggle-pill-btn" title="Tampilkan atau sembunyikan arti">
-            <span>👁️ Tampilkan/Sembunyikan Arti</span>
+            <span>👁️ Arti</span>
           </button>
           <button id="toggle-hanzi-btn" class="toggle-pill-btn" title="Tampilkan atau sembunyikan karakter Hanzi">
-            <span>👁️ Tampilkan/Sembunyikan Hanzi</span>
+            <span>👁️ Hanzi</span>
           </button>
         </div>
 
         <!-- CARD FOOTER ACTIONS -->
         <div class="card-footer">
-          <button id="repeat-card-btn" class="repeat-btn secondary-btn" title="Sembunyikan kembali semua jawaban pada kartu ini">
-            <span class="btn-main-text">🔑 Ulangi Kartu Ini</span>
-            <span class="btn-subtext">(Sembunyikan Semua)</span>
-          </button>
           <button id="next-word-btn" class="next-btn primary-glow">
             <span class="btn-main-text">Lanjut Santai ✨</span>
             <span class="btn-subtext">(Kata Acak Selanjutnya)</span>
@@ -161,15 +161,37 @@
         </div>
 
       </article>
+
+      <!-- HANZI WRITER INTERACTIVE TRACING SECTION -->
+      <section class="writing-board-card" id="writing-board-card">
+        <div class="writing-board-header">
+          <div class="board-title-group">
+            <span class="board-icon">✍️</span>
+            <span class="board-title">Latihan Tracing Goresan Hanzi</span>
+          </div>
+          <div class="board-actions">
+            <button id="animate-hanzi-btn" class="clear-btn secondary-action" title="Putar animasi urutan goresan">
+              <span>▶️ Contoh</span>
+            </button>
+            <button id="reset-tracing-btn" class="clear-btn" title="Ulangi latihan goresan">
+              <span>🔄 Ulangi</span>
+            </button>
+          </div>
+        </div>
+        <div class="tracing-target-wrapper">
+          <div id="character-target-div"></div>
+        </div>
+        <div id="tracing-feedback" class="tracing-feedback">
+          <span id="tracing-feedback-icon">🌱</span>
+          <span id="tracing-feedback-text">Tebalkan bayangan goresan dengan jari / kursor</span>
+        </div>
+      </section>
+
     </main>
 
-    <!-- Bottom Reassuring Tips -->
+    <!-- Clean Footer -->
     <footer class="app-footer">
-      <div class="tip-card">
-        <span class="tip-icon">💡</span>
-        <p id="tip-text">Trik Santai: Ingat bunyinya (Pinyin) & maknanya dulu. Karakter Hanzi akan hafal sendiri tanpa dipaksa!</p>
-      </div>
-      <p class="copyright">Mandarin Chill • 100% Anti-Stres & Anti-Mengintimidasi • Dibuat dengan Cinta 🍵</p>
+      <p class="copyright">HSK 1 - Micro-Dosing Mode</p>
     </footer>
 
   </div>
@@ -198,10 +220,10 @@
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js')
           .then((reg) => {
-            console.log('Mandarin Chill Service Worker registered successfully:', reg.scope);
+            console.log('HSK 1 Service Worker registered successfully:', reg.scope);
           })
           .catch((err) => {
-            console.warn('Mandarin Chill Service Worker registration failed:', err);
+            console.warn('HSK 1 Service Worker registration failed:', err);
           });
       });
     }
