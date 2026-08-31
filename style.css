@@ -480,16 +480,20 @@ body {
   color: #ffffff;
 }
 
-.record-btn.listening {
-  background: var(--accent-peach);
+/* Active recording state – prominently red and pulsing so user knows it's on */
+.record-btn.listening,
+.record-btn.recording {
+  background: #dc2626;
   color: #ffffff;
-  animation: recPulse 1.2s infinite ease-in-out;
+  border: none;
+  animation: recPulse 1s infinite ease-in-out;
+  box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.5);
 }
 
 @keyframes recPulse {
-  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(232, 141, 125, 0.5); }
-  50% { transform: scale(1.06); box-shadow: 0 0 0 10px rgba(232, 141, 125, 0); }
-  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(232, 141, 125, 0); }
+  0%   { transform: scale(1);    box-shadow: 0 0 0 0  rgba(220, 38, 38, 0.55); }
+  50%  { transform: scale(1.07); box-shadow: 0 0 0 12px rgba(220, 38, 38, 0); }
+  100% { transform: scale(1);    box-shadow: 0 0 0 0  rgba(220, 38, 38, 0); }
 }
 
 /* Obscured / Blur Answer Class */
@@ -790,9 +794,21 @@ body.dark-mode .speech-feedback-box.try-again {
   padding: 8px 0;
 }
 
+/* Multi-character Hanzi Writer container – flex row, auto-sized */
 #character-target-div {
-  width: 190px;
-  height: 190px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  touch-action: none;
+}
+
+/* Individual character writer box (one per CJK character) */
+.hanzi-char-wrapper {
+  width: 180px;
+  height: 180px;
   background: var(--canvas-bg);
   border: 2px dashed var(--canvas-border);
   border-radius: var(--radius-md);
@@ -800,13 +816,13 @@ body.dark-mode .speech-feedback-box.try-again {
   display: flex;
   justify-content: center;
   align-items: center;
-  position: relative;
-  touch-action: none;
   cursor: crosshair;
+  touch-action: none;
+  flex-shrink: 0;
   transition: var(--transition-smooth);
 }
 
-#character-target-div svg {
+.hanzi-char-wrapper svg {
   display: block;
   border-radius: var(--radius-md);
 }

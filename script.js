@@ -318,7 +318,7 @@ let sessionCount = 1;
 let favorites = JSON.parse(localStorage.getItem('hsk_favs') || localStorage.getItem('mandarin_chill_favs') || '[]');
 
 // Hanzi Writer State
-let hanziWriter = null;
+let hanziWriters = []; // Array of writer instances for multi-character support
 let writerQuizActive = false;
 
 // DOM Element References
@@ -552,7 +552,7 @@ function toggleTheme() {
   localStorage.setItem('hsk_theme', isDark ? 'dark' : 'light');
   updateThemeIcon(isDark);
   // Re-render Hanzi Writer SVG colors to match the new theme
-  if (hanziWriter && currentWord) {
+  if (hanziWriters.length > 0 && currentWord) {
     updateHanziWriter(currentWord.hanzi);
   }
 }
@@ -564,7 +564,7 @@ function updateThemeIcon(isDark) {
   }
 }
 
-// ─── Hanzi Writer Integration ────────────────────────────────────────────────
+// ─── Hanzi Writer Integration (Multi-Character Support) ──────────────────────
 
 /**
  * Returns theme-aware colors for HanziWriter based on current dark/light mode.
@@ -580,142 +580,149 @@ function getWriterColors() {
 }
 
 /**
- * Extract the first CJK character from a multi-character word string.
- * Returns '' if none found (e.g. pinyin-only fallback word).
+ * Extract ALL CJK characters from a multi-character word string.
+ * Returns an array (empty if none found, e.g. pinyin-only fallback).
  */
-function extractFirstHanzi(hanzi) {
-  // Match the first CJK Unified Ideograph code point
-  const match = hanzi.match(/[\u4e00-\u9fff\u3400-\u4dbf]/);
-  return match ? match[0] : '';
+function extractAllHanzi(hanziWord) {
+  const matches = hanziWord.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g);
+  return matches || [];
 }
 
 /**
- * Initialize HanziWriter for the first time using the current word.
- * Called after vocabulary is loaded and the first card is shown.
+ * Start quiz mode on a single HanziWriter instance.
  */
-function initHanziWriter(character) {
-  const targetDiv = document.getElementById('character-target-div');
-  if (!targetDiv) return;
-
-  // Clear any leftover SVG from a previous instantiation
-  targetDiv.innerHTML = '';
-
-  const colors = getWriterColors();
-
-  // Compute size: fill the 190px container but leave 10px padding each side
-  const size = Math.min(targetDiv.clientWidth || 180, 180);
-
+function startSingleWriterQuiz(writer) {
   try {
-    hanziWriter = HanziWriter.create('character-target-div', character, {
-      width: size,
-      height: size,
-      padding: 10,
-      showOutline: true,
-      showCharacter: false,          // User draws the character
-      strokeColor: colors.strokeColor,
-      outlineColor: colors.outlineColor,
-      highlightColor: colors.highlightColor,
-      radicalColor: colors.radicalColor,
-      drawingWidth: 24,              // Nice chunky stroke for touch
-      strokeAnimationSpeed: 1,
-      delayBetweenStrokes: 200,
-      // Quiz callbacks
-      onLoadCharDataSuccess: () => {
-        startWriterQuiz();
-      },
-      onLoadCharDataError: () => {
-        setTracingFeedback('loading-error');
-      }
+    writer.quiz({
+      onMistake: () => setTracingFeedback('mistake'),
+      onCorrectStroke: () => setTracingFeedback('correct-stroke'),
+      onComplete: () => setTracingFeedback('complete'),
     });
   } catch (err) {
-    console.warn('[HanziWriter] Could not create writer:', err);
+    console.warn('[HanziWriter] quiz() failed:', err);
   }
 }
 
 /**
- * Update the writer to display a new character.
- * Uses setCharacter() if the writer already exists, otherwise creates a fresh instance.
+ * Initialize HanziWriter for ALL CJK characters in a word.
+ * Dynamically creates individual wrapper <div> for each character,
+ * appended into #character-target-div (which is a flex row).
+ */
+function initHanziWriter(hanziWord) {
+  const targetDiv = document.getElementById('character-target-div');
+  if (!targetDiv) return;
+
+  // Clear previous writers and DOM children
+  hanziWriters = [];
+  targetDiv.innerHTML = '';
+
+  const chars = extractAllHanzi(hanziWord);
+  if (chars.length === 0) return;
+
+  const colors = getWriterColors();
+  const size = 180;
+
+  chars.forEach((char, idx) => {
+    const wrapperId = `hanzi-char-${idx}`;
+    const wrapper = document.createElement('div');
+    wrapper.id = wrapperId;
+    wrapper.className = 'hanzi-char-wrapper';
+    targetDiv.appendChild(wrapper);
+
+    try {
+      const writer = HanziWriter.create(wrapperId, char, {
+        width: size,
+        height: size,
+        padding: 10,
+        showOutline: true,
+        showCharacter: false,       // User must draw the character
+        strokeColor:    colors.strokeColor,
+        outlineColor:   colors.outlineColor,
+        highlightColor: colors.highlightColor,
+        radicalColor:   colors.radicalColor,
+        drawingWidth: 24,           // Chunky stroke for touch
+        strokeAnimationSpeed: 1,
+        delayBetweenStrokes: 200,
+        onLoadCharDataSuccess: () => {
+          startSingleWriterQuiz(writer);
+        },
+        onLoadCharDataError: () => {
+          setTracingFeedback('loading-error');
+        }
+      });
+      hanziWriters.push(writer);
+    } catch (err) {
+      console.warn('[HanziWriter] Could not create writer for char:', char, err);
+    }
+  });
+}
+
+/**
+ * Update the writer display for a new word.
+ * Always fully re-initializes to support multi-character words correctly.
  */
 function updateHanziWriter(hanziWord) {
-  const char = extractFirstHanzi(hanziWord);
-
-  // Reset feedback text
   setTracingFeedback('idle');
 
-  if (!char) {
-    // No CJK character available (e.g. a number or pinyin-only entry) → hide board
+  const chars = extractAllHanzi(hanziWord);
+
+  if (chars.length === 0) {
+    // No CJK character available (e.g. pinyin-only entry) → hide board
     const board = document.getElementById('writing-board-card');
     if (board) board.style.display = 'none';
     return;
   }
 
-  // Make sure the board is visible
+  // Ensure the board is visible
   const board = document.getElementById('writing-board-card');
   if (board) board.style.display = '';
 
-  if (!hanziWriter) {
-    initHanziWriter(char);
-    return;
-  }
-
-  writerQuizActive = false;
-  const colors = getWriterColors();
-
-  hanziWriter.setCharacter(char)
-    .then(() => {
-      startWriterQuiz();
-    })
-    .catch((err) => {
-      console.warn('[HanziWriter] setCharacter failed:', err);
-      setTracingFeedback('loading-error');
-    });
+  initHanziWriter(hanziWord);
 }
 
 /**
- * Start (or restart) the quiz mode on the current character.
+ * Start (or restart) quiz mode on ALL current character writers.
  */
 function startWriterQuiz() {
-  if (!hanziWriter) return;
-  writerQuizActive = true;
+  if (hanziWriters.length === 0) return;
   setTracingFeedback('idle');
-
-  hanziWriter.quiz({
-    onMistake: (strokeData) => {
-      // Gentle encouragement on mistake
-      setTracingFeedback('mistake');
-    },
-    onCorrectStroke: (strokeData) => {
-      setTracingFeedback('correct-stroke');
-    },
-    onComplete: (summaryData) => {
-      writerQuizActive = false;
-      setTracingFeedback('complete');
-    }
-  });
+  hanziWriters.forEach(writer => startSingleWriterQuiz(writer));
 }
 
 /**
- * Animate the character strokes as a demonstration.
+ * Animate all character strokes as a demonstration, then restart quiz.
  */
 function animateWriterCharacter() {
-  if (!hanziWriter) return;
-  writerQuizActive = false;
+  if (hanziWriters.length === 0) return;
   setTracingFeedback('idle');
-  hanziWriter.animateCharacter({
-    onComplete: () => {
-      // After animation demo, restart quiz automatically
-      setTimeout(() => startWriterQuiz(), 800);
-    }
+
+  let completedCount = 0;
+  hanziWriters.forEach(writer => {
+    writer.animateCharacter({
+      onComplete: () => {
+        completedCount++;
+        // Only restart quiz after ALL characters finish animating
+        if (completedCount === hanziWriters.length) {
+          setTimeout(() => startWriterQuiz(), 800);
+        }
+      }
+    });
   });
 }
 
 /**
- * Reset (cancel) the current quiz and restart it from stroke 0.
+ * Reset (cancel) all quizzes and restart them from stroke 0.
  */
 function resetWriterQuiz() {
-  if (!hanziWriter) return;
-  hanziWriter.cancelQuiz();
-  hanziWriter.hideCharacter();
+  if (hanziWriters.length === 0) return;
+  hanziWriters.forEach(writer => {
+    try {
+      writer.cancelQuiz();
+      writer.hideCharacter();
+    } catch (err) {
+      // Ignore if writer isn't in a quizzable state
+    }
+  });
   startWriterQuiz();
   showToast('🔄 Latihan dimulai ulang dari awal!');
 }
@@ -788,33 +795,43 @@ function playSpeechPronunciation(textToSpeak) {
 let recognition = null;
 let isListening = false;
 
+/**
+ * Resets the voice button to its idle state.
+ * Called from onresult, onerror, and onend to ensure button never gets stuck.
+ */
+function resetVoiceButton() {
+  isListening = false;
+  if (voiceRecBtn) {
+    voiceRecBtn.classList.remove('listening', 'recording');
+    if (voiceBtnIcon) voiceBtnIcon.textContent = '🎙️';
+    if (voiceBtnLabel) voiceBtnLabel.textContent = 'Coba Ucapkan';
+  }
+}
+
 function initSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) return null;
 
   const rec = new SpeechRecognition();
   rec.lang = 'zh-CN';
-  rec.continuous = false;
-  rec.interimResults = false;
+  rec.continuous = false;       // Capture one utterance then stop
+  rec.interimResults = false;   // Only final results, no partial transcripts
   rec.maxAlternatives = 3;
 
   rec.onstart = () => {
     isListening = true;
     if (voiceRecBtn) {
-      voiceRecBtn.classList.add('listening');
-      if (voiceBtnIcon) voiceBtnIcon.textContent = '🎙️';
+      // Prominent red + blinking indicator so user clearly knows it's recording
+      voiceRecBtn.classList.add('listening', 'recording');
+      if (voiceBtnIcon) voiceBtnIcon.textContent = '🔴';
       if (voiceBtnLabel) voiceBtnLabel.textContent = 'Mendengarkan...';
     }
     hideSpeechFeedback();
   };
 
   rec.onresult = (event) => {
-    isListening = false;
-    if (voiceRecBtn) {
-      voiceRecBtn.classList.remove('listening');
-      if (voiceBtnIcon) voiceBtnIcon.textContent = '🎙️';
-      if (voiceBtnLabel) voiceBtnLabel.textContent = 'Coba Ucapkan';
-    }
+    // Reset button immediately so user can try again
+    resetVoiceButton();
 
     if (event.results && event.results.length > 0) {
       const recognizedText = event.results[0][0].transcript;
@@ -823,29 +840,24 @@ function initSpeechRecognition() {
   };
 
   rec.onerror = (event) => {
-    isListening = false;
-    if (voiceRecBtn) {
-      voiceRecBtn.classList.remove('listening');
-      if (voiceBtnIcon) voiceBtnIcon.textContent = '🎙️';
-      if (voiceBtnLabel) voiceBtnLabel.textContent = 'Coba Ucapkan';
-    }
+    // Always reset button first to prevent it from getting stuck
+    resetVoiceButton();
 
     if (event.error === 'no-speech') {
-      showSpeechFeedback(false, "Suara tidak terdengar. Coba dekatkan mikrofon dan ulangi perlahan ya 🎧");
-    } else if (event.error === 'not-allowed') {
-      showToast("Izin mikrofon diperlukan untuk mencoba pelafalan 🎤");
+      showSpeechFeedback(false, "Suara tidak terdengar. Coba dekatkan mikrofon dan ucapkan lebih jelas ya 🎧");
+    } else if (event.error === 'not-allowed' || event.error === 'permission-denied') {
+      showToast("⛔ Izin mikrofon diperlukan. Aktifkan di pengaturan browser!");
+    } else if (event.error === 'network') {
+      showToast("🌐 Koneksi bermasalah. Cek internet dan coba lagi.");
     } else {
-      showSpeechFeedback(false, "Hampir tepat! Coba dengarkan lagi suaranya dan ulangi perlahan 🎧");
+      showSpeechFeedback(false, `Terjadi masalah (${event.error}). Coba ucapkan ulang perlahan 🎧`);
     }
   };
 
   rec.onend = () => {
-    isListening = false;
-    if (voiceRecBtn) {
-      voiceRecBtn.classList.remove('listening');
-      if (voiceBtnIcon) voiceBtnIcon.textContent = '🎙️';
-      if (voiceBtnLabel) voiceBtnLabel.textContent = 'Coba Ucapkan';
-    }
+    // onend always fires last (after onresult/onerror).
+    // Always reset button so user can always press again.
+    resetVoiceButton();
   };
 
   return rec;
@@ -859,18 +871,22 @@ function handleVoiceRecognitionToggle() {
   }
 
   if (isListening && recognition) {
+    // User clicked again while recording → stop it
     recognition.stop();
     return;
   }
 
-  if (!recognition) {
-    recognition = initSpeechRecognition();
-  }
+  // Always create a fresh recognition instance to avoid
+  // "already started" InvalidStateError across multiple uses
+  recognition = initSpeechRecognition();
+  if (!recognition) return;
 
   try {
     recognition.start();
   } catch (err) {
-    console.warn("Speech recognition error:", err);
+    console.warn("Speech recognition start error:", err);
+    resetVoiceButton();
+    showToast("Gagal memulai mikrofon. Coba lagi 🎤");
   }
 }
 
