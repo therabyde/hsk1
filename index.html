@@ -46,6 +46,12 @@
       </div>
 
       <div class="header-actions">
+        <!-- Daily History Trigger -->
+        <button id="history-trigger" class="icon-btn" title="Lihat Riwayat Belajar" aria-label="Buka Riwayat Belajar">
+          <span class="btn-icon">📊</span>
+          <span>Riwayat</span>
+        </button>
+
         <!-- Dark Mode Toggle Button -->
         <button id="theme-toggle-btn" class="icon-btn" title="Ganti Mode Gelap/Terang" aria-label="Toggle Tema Gelap">
           <span id="theme-icon" class="btn-icon">🌙</span>
@@ -59,6 +65,18 @@
       </div>
     </header>
 
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs" aria-label="Pilih Mode Belajar">
+      <button id="tab-vocab-btn" class="tab-btn active" data-tab="vocab" aria-selected="true">
+        <span class="tab-icon">📚</span>
+        <span class="tab-text">Kosakata</span>
+      </button>
+      <button id="tab-writing-btn" class="tab-btn" data-tab="writing" aria-selected="false">
+        <span class="tab-icon">✍️</span>
+        <span class="tab-text">Latihan 10x12</span>
+      </button>
+    </nav>
+
     <!-- Clean Stats Bar (Word Count & Day Streak) -->
     <section class="zen-bar">
       <div class="zen-pill">
@@ -71,8 +89,8 @@
       </div>
     </section>
 
-    <!-- MAIN CARD CONTAINER (Micro-Dosing: Strictly ONE card at a time) -->
-    <main class="flashcard-section">
+    <!-- TAB 1: MAIN VOCABULARY VIEW -->
+    <main id="vocab-view" class="flashcard-section tab-content">
       
       <!-- Loading State -->
       <div id="loading-state" class="card-loader">
@@ -189,6 +207,54 @@
 
     </main>
 
+    <!-- TAB 2: WRITING MODE 10x12 VIEW (Mi Zi Ge Canvas) -->
+    <section id="writing-view" class="writing-mode-section tab-content hidden" aria-label="Mode Menulis Hanzi 10x12">
+      
+      <!-- Top Target Character Banner -->
+      <div class="writing-hero-card">
+        <div class="hero-char-group">
+          <div class="hero-hanzi-display">
+            <span id="writing-target-char" class="target-large-char">你</span>
+          </div>
+          <div class="hero-info">
+            <div class="hero-pinyin-row">
+              <span id="writing-target-pinyin" class="target-pinyin">nǐ</span>
+              <button id="writing-audio-btn" class="speech-btn mini" title="Dengarkan Pengucapan Mandarin">
+                <span>🔊</span>
+              </button>
+            </div>
+            <p id="writing-target-meaning" class="target-meaning">Kamu / Anda</p>
+            <span class="target-subhint">Tuliskan karakter ini berulang pada lembar 10x12 di bawah ✍️</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Toolbar -->
+      <div class="writing-canvas-toolbar">
+        <div class="toolbar-info">
+          <span class="grid-spec-badge">📐 Mi Zi Ge (10 × 12 Kotak)</span>
+        </div>
+        <div class="toolbar-buttons">
+          <button id="clear-grid-canvas-btn" class="canvas-action-btn secondary" title="Hapus seluruh coretan di kanvas">
+            <span>🗑️ Bersihkan</span>
+          </button>
+          <button id="next-grid-char-btn" class="canvas-action-btn primary" title="Selesai & ganti huruf acak berikutnya">
+            <span>✅ Selesai & Lanjut</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Scrollable Canvas Viewport (1000px x 1200px) -->
+      <div class="grid-canvas-scroll-container" id="grid-canvas-scroll-container">
+        <canvas id="mizige-canvas" width="1000" height="1200" class="mizige-canvas"></canvas>
+      </div>
+
+      <p class="scroll-instruction-note">
+        💡 <em>Tips: Geser / scroll kanvas untuk mengisi 120 kotak latihan yang tersedia.</em>
+      </p>
+
+    </section>
+
     <!-- Clean Footer -->
     <footer class="app-footer">
       <p class="copyright">HSK 1 - Micro-Dosing Mode</p>
@@ -206,6 +272,20 @@
       <div class="modal-body">
         <p id="empty-fav-msg" class="empty-msg">Belum ada kata favorit. Klik tombol ⭐ pada flashcard untuk menyimpan kata yang kamu suka!</p>
         <ul id="fav-list" class="fav-list"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL / DIALOG FOR DAILY HISTORY -->
+  <div id="history-modal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>📊 Riwayat Belajar (7 Hari Terakhir)</h3>
+        <button id="close-history-modal-btn" class="close-btn" aria-label="Tutup Modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="history-intro">Catatan jumlah kata yang kamu pelajari & tebak per hari:</p>
+        <ul id="history-list" class="history-list"></ul>
       </div>
     </div>
   </div>

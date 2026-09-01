@@ -321,10 +321,39 @@ let favorites = JSON.parse(localStorage.getItem('hsk_favs') || localStorage.getI
 let hanziWriters = []; // Array of writer instances for multi-character support
 let writerQuizActive = false;
 
+// Feature 1: TTS Utterance global reference (prevents Android GC from killing the utterance)
+window.currentUtterance = null;
+
+// Feature 2: Silence Timer for Auto-Stop Mic
+let silenceTimer = null;
+const SILENCE_TIMEOUT_MS = 5500; // 5.5 seconds of silence before auto-stop
+
+// Tab Navigation & Writing Mode State
+let currentGridWord = null;
+let currentGridChar = '';
+let mizigeCanvas = null;
+let mizigeCtx = null;
+let isDrawingGrid = false;
+let lastGridX = 0;
+let lastGridY = 0;
+
 // DOM Element References
 const loaderEl = document.getElementById('loading-state');
 const errorEl = document.getElementById('error-state');
 const cardEl = document.getElementById('flashcard');
+
+const tabVocabBtn = document.getElementById('tab-vocab-btn');
+const tabWritingBtn = document.getElementById('tab-writing-btn');
+const vocabView = document.getElementById('vocab-view');
+const writingView = document.getElementById('writing-view');
+
+const writingTargetChar = document.getElementById('writing-target-char');
+const writingTargetPinyin = document.getElementById('writing-target-pinyin');
+const writingTargetMeaning = document.getElementById('writing-target-meaning');
+const writingAudioBtn = document.getElementById('writing-audio-btn');
+const clearGridCanvasBtn = document.getElementById('clear-grid-canvas-btn');
+const nextGridCharBtn = document.getElementById('next-grid-char-btn');
+const mizigeScrollContainer = document.getElementById('grid-canvas-scroll-container');
 
 const pinyinEl = document.getElementById('card-pinyin');
 const meaningEl = document.getElementById('card-meaning');
@@ -346,6 +375,10 @@ const favModal = document.getElementById('fav-modal');
 const closeModalBtn = document.getElementById('close-modal-btn');
 const favListEl = document.getElementById('fav-list');
 const emptyFavMsg = document.getElementById('empty-fav-msg');
+
+const historyTriggerBtn = document.getElementById('history-trigger');
+const historyModal = document.getElementById('history-modal');
+const closeHistoryModalBtn = document.getElementById('close-history-modal-btn');
 
 const sessionCountEl = document.getElementById('session-count');
 const streakCountEl = document.getElementById('streak-count');
@@ -436,6 +469,7 @@ function parseAndBuildVocabulary(rawText) {
     vocabularyList = shuffleArray(parsedWords);
     showState('card');
     displayCurrentWord();
+    if (!currentGridChar) pickRandomGridChar();
   } else {
     buildVocabularyFromDictionary();
   }
@@ -453,6 +487,7 @@ function buildVocabularyFromDictionary() {
   vocabularyList = shuffleArray(list);
   showState('card');
   displayCurrentWord();
+  if (!currentGridChar) pickRandomGridChar();
 }
 
 // Display Current Micro-Dosing Flashcard
@@ -493,6 +528,8 @@ function handleNextWord() {
   if (sessionCountEl) {
     sessionCountEl.textContent = `Kata ke-${sessionCount} hari ini`;
   }
+  // Feature 3: Tambah +1 kata ke riwayat harian saat klik Next
+  recordDailyWord();
   displayCurrentWord();
 }
 
@@ -531,6 +568,66 @@ function updateDayStreak() {
   if (streakCountEl) {
     streakCountEl.textContent = streak;
   }
+}
+
+// ─── Feature 3: Daily History (Riwayat Belajar Harian) ───────────────────────
+
+/**
+ * Tambahkan +1 kata ke riwayat harian di localStorage.
+ * Dipanggil setiap kali user maju ke kata berikutnya atau berhasil menebak.
+ */
+function recordDailyWord() {
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  let history = JSON.parse(localStorage.getItem('dailyHistory') || '{}');
+  history[today] = (history[today] || 0) + 1;
+  localStorage.setItem('dailyHistory', JSON.stringify(history));
+}
+
+/**
+ * Ambil riwayat 7 hari terakhir, diurutkan dari hari terbaru.
+ * Mengembalikan array of { date, count } objects.
+ */
+function getDailyHistory() {
+  const history = JSON.parse(localStorage.getItem('dailyHistory') || '{}');
+  const result = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const dateKey = d.toISOString().slice(0, 10);
+    result.push({ date: dateKey, count: history[dateKey] || 0 });
+  }
+  return result;
+}
+
+/**
+ * Format tanggal YYYY-MM-DD ke format "1 Sept" / "31 Ags" (Bahasa Indonesia).
+ */
+function formatDateID(dateStr) {
+  const monthNames = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Ags','Sept','Okt','Nov','Des'];
+  const d = new Date(dateStr + 'T00:00:00');
+  return `${d.getDate()} ${monthNames[d.getMonth()]}`;
+}
+
+/**
+ * Render isi modal riwayat belajar harian.
+ */
+function renderHistoryModal() {
+  const historyListEl = document.getElementById('history-list');
+  if (!historyListEl) return;
+
+  const historyData = getDailyHistory();
+  historyListEl.innerHTML = '';
+
+  historyData.forEach(item => {
+    const li = document.createElement('li');
+    li.className = 'history-item';
+    const isToday = item.date === new Date().toISOString().slice(0, 10);
+    li.innerHTML = `
+      <span class="history-date">${formatDateID(item.date)}${isToday ? ' <span class="today-badge">Hari ini</span>' : ''}</span>
+      <span class="history-count">${item.count > 0 ? `<strong>${item.count}</strong> kata` : '<span class="zero-count">—</span>'}</span>
+    `;
+    historyListEl.appendChild(li);
+  });
 }
 
 // Theme (Dark Mode) Management
@@ -596,7 +693,11 @@ function startSingleWriterQuiz(writer) {
     writer.quiz({
       onMistake: () => setTracingFeedback('mistake'),
       onCorrectStroke: () => setTracingFeedback('correct-stroke'),
-      onComplete: () => setTracingFeedback('complete'),
+      onComplete: () => {
+        setTracingFeedback('complete');
+        // Feature 3: Tambah +1 kata saat berhasil menyelesaikan goresan kanvas
+        recordDailyWord();
+      },
     });
   } catch (err) {
     console.warn('[HanziWriter] quiz() failed:', err);
@@ -766,6 +867,214 @@ function setTracingFeedback(state) {
   }
 }
 
+// ─── Mode Menulis Hanzi (10x12 Mi Zi Ge Canvas) ──────────────────────────────
+
+/**
+ * Tab switcher between Vocabulary mode and 10x12 Writing Practice mode.
+ */
+function switchTab(tabName) {
+  if (tabName === 'vocab') {
+    if (tabVocabBtn) {
+      tabVocabBtn.classList.add('active');
+      tabVocabBtn.setAttribute('aria-selected', 'true');
+    }
+    if (tabWritingBtn) {
+      tabWritingBtn.classList.remove('active');
+      tabWritingBtn.setAttribute('aria-selected', 'false');
+    }
+    if (vocabView) vocabView.classList.remove('hidden');
+    if (writingView) writingView.classList.add('hidden');
+  } else if (tabName === 'writing') {
+    if (tabWritingBtn) {
+      tabWritingBtn.classList.add('active');
+      tabWritingBtn.setAttribute('aria-selected', 'true');
+    }
+    if (tabVocabBtn) {
+      tabVocabBtn.classList.remove('active');
+      tabVocabBtn.setAttribute('aria-selected', 'false');
+    }
+    if (writingView) writingView.classList.remove('hidden');
+    if (vocabView) vocabView.classList.add('hidden');
+
+    // Initialize grid canvas & load character if not ready
+    if (!mizigeCtx) {
+      initGridCanvas();
+    }
+    if (!currentGridChar) {
+      pickRandomGridChar();
+    }
+  }
+}
+
+/**
+ * Pick a random HSK 1 character for 10x12 practice.
+ * If word contains multiple characters, takes index 0 only as requested.
+ */
+function pickRandomGridChar() {
+  if (!vocabularyList || vocabularyList.length === 0) {
+    buildVocabularyFromDictionary();
+  }
+
+  const randomIndex = Math.floor(Math.random() * vocabularyList.length);
+  currentGridWord = vocabularyList[randomIndex];
+
+  // Extract CJK characters and pick index 0
+  const chars = extractAllHanzi(currentGridWord.hanzi);
+  currentGridChar = chars.length > 0 ? chars[0] : currentGridWord.hanzi.charAt(0);
+
+  displayGridTargetChar();
+}
+
+/**
+ * Display the selected character, pinyin, and meaning in the hero card.
+ */
+function displayGridTargetChar() {
+  if (!currentGridWord) return;
+  if (writingTargetChar) writingTargetChar.textContent = currentGridChar;
+  if (writingTargetPinyin) writingTargetPinyin.textContent = currentGridWord.pinyin;
+  if (writingTargetMeaning) writingTargetMeaning.textContent = currentGridWord.meaning;
+}
+
+/**
+ * Get dynamic ink stroke color based on current dark/light mode.
+ */
+function getInkColor() {
+  const isDark = document.body.classList.contains('dark-mode');
+  return isDark ? '#edf5f4' : '#1e293b';
+}
+
+/**
+ * Precise canvas coordinate calculation considering container scroll offsets.
+ */
+function getCanvasCoords(e, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+
+  let clientX, clientY;
+  if (e.touches && e.touches.length > 0) {
+    clientX = e.touches[0].clientX;
+    clientY = e.touches[0].clientY;
+  } else if (e.changedTouches && e.changedTouches.length > 0) {
+    clientX = e.changedTouches[0].clientX;
+    clientY = e.changedTouches[0].clientY;
+  } else {
+    clientX = e.clientX;
+    clientY = e.clientY;
+  }
+
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY
+  };
+}
+
+/**
+ * Initialize 10x12 Mi Zi Ge Drawing Canvas with touch & mouse support.
+ */
+function initGridCanvas() {
+  mizigeCanvas = document.getElementById('mizige-canvas');
+  if (!mizigeCanvas) return;
+
+  mizigeCtx = mizigeCanvas.getContext('2d');
+
+  // Mouse Events
+  mizigeCanvas.addEventListener('mousedown', (e) => {
+    isDrawingGrid = true;
+    const coords = getCanvasCoords(e, mizigeCanvas);
+    lastGridX = coords.x;
+    lastGridY = coords.y;
+
+    mizigeCtx.beginPath();
+    mizigeCtx.arc(coords.x, coords.y, 1.5, 0, Math.PI * 2);
+    mizigeCtx.fillStyle = getInkColor();
+    mizigeCtx.fill();
+  });
+
+  mizigeCanvas.addEventListener('mousemove', (e) => {
+    if (!isDrawingGrid) return;
+    const coords = getCanvasCoords(e, mizigeCanvas);
+
+    mizigeCtx.beginPath();
+    mizigeCtx.moveTo(lastGridX, lastGridY);
+    mizigeCtx.lineTo(coords.x, coords.y);
+    mizigeCtx.strokeStyle = getInkColor();
+    mizigeCtx.lineWidth = 3;
+    mizigeCtx.lineCap = 'round';
+    mizigeCtx.lineJoin = 'round';
+    mizigeCtx.stroke();
+
+    lastGridX = coords.x;
+    lastGridY = coords.y;
+  });
+
+  mizigeCanvas.addEventListener('mouseup', () => { isDrawingGrid = false; });
+  mizigeCanvas.addEventListener('mouseleave', () => { isDrawingGrid = false; });
+
+  // Touch Events (Prevent scroll during active draw on canvas)
+  mizigeCanvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    isDrawingGrid = true;
+    const coords = getCanvasCoords(e, mizigeCanvas);
+    lastGridX = coords.x;
+    lastGridY = coords.y;
+
+    mizigeCtx.beginPath();
+    mizigeCtx.arc(coords.x, coords.y, 1.5, 0, Math.PI * 2);
+    mizigeCtx.fillStyle = getInkColor();
+    mizigeCtx.fill();
+  }, { passive: false });
+
+  mizigeCanvas.addEventListener('touchmove', (e) => {
+    if (!isDrawingGrid) return;
+    e.preventDefault();
+    const coords = getCanvasCoords(e, mizigeCanvas);
+
+    mizigeCtx.beginPath();
+    mizigeCtx.moveTo(lastGridX, lastGridY);
+    mizigeCtx.lineTo(coords.x, coords.y);
+    mizigeCtx.strokeStyle = getInkColor();
+    mizigeCtx.lineWidth = 3;
+    mizigeCtx.lineCap = 'round';
+    mizigeCtx.lineJoin = 'round';
+    mizigeCtx.stroke();
+
+    lastGridX = coords.x;
+    lastGridY = coords.y;
+  }, { passive: false });
+
+  mizigeCanvas.addEventListener('touchend', () => { isDrawingGrid = false; });
+  mizigeCanvas.addEventListener('touchcancel', () => { isDrawingGrid = false; });
+}
+
+/**
+ * Clear canvas strokes without erasing the SVG CSS background grid.
+ */
+function clearGridCanvas() {
+  if (!mizigeCanvas || !mizigeCtx) return;
+  mizigeCtx.clearRect(0, 0, mizigeCanvas.width, mizigeCanvas.height);
+  showToast('🗑️ Kanvas telah dibersihkan');
+}
+
+/**
+ * Complete current writing practice:
+ * a. Clear canvas strokes
+ * b. Pick and display a new random character
+ * c. Record +1 into dailyHistory
+ */
+function completeAndNextGridChar() {
+  if (mizigeCanvas && mizigeCtx) {
+    mizigeCtx.clearRect(0, 0, mizigeCanvas.width, mizigeCanvas.height);
+  }
+  pickRandomGridChar();
+  recordDailyWord();
+  sessionCount++;
+  if (sessionCountEl) {
+    sessionCountEl.textContent = `Kata ke-${sessionCount} hari ini`;
+  }
+  showToast('✨ Selesai! Karakter baru siap ditulis (+1 riwayat)');
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -776,19 +1085,21 @@ function playSpeechPronunciation(textToSpeak) {
     return;
   }
 
+  // Feature 1 Fix: WAJIB cancel() SEBELUM speak() untuk membersihkan antrean macet
   window.speechSynthesis.cancel();
 
   const text = textToSpeak || currentWord.hanzi || currentWord.pinyin;
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = 'zh-CN'; // Mandarin
-  utterance.rate = 0.75; // Slower/relaxed rate
-  utterance.pitch = 0.85; // Softer pitch
+  // Feature 1 Fix: Simpan ke window.currentUtterance agar tidak di-GC oleh Android
+  window.currentUtterance = new SpeechSynthesisUtterance(text);
+  window.currentUtterance.lang = 'zh-CN'; // Mandarin
+  window.currentUtterance.rate = 0.75; // Slower/relaxed rate
+  window.currentUtterance.pitch = 0.85; // Softer pitch
 
   if (audioSpeechBtn) audioSpeechBtn.classList.add('playing');
-  utterance.onend = () => { if (audioSpeechBtn) audioSpeechBtn.classList.remove('playing'); };
-  utterance.onerror = () => { if (audioSpeechBtn) audioSpeechBtn.classList.remove('playing'); };
+  window.currentUtterance.onend = () => { if (audioSpeechBtn) audioSpeechBtn.classList.remove('playing'); };
+  window.currentUtterance.onerror = () => { if (audioSpeechBtn) audioSpeechBtn.classList.remove('playing'); };
 
-  window.speechSynthesis.speak(utterance);
+  window.speechSynthesis.speak(window.currentUtterance);
 }
 
 // Speech Recognition & Evaluation
@@ -808,38 +1119,67 @@ function resetVoiceButton() {
   }
 }
 
+// Feature 2: Reset silence auto-stop timer
+function resetSilenceTimer() {
+  clearTimeout(silenceTimer);
+  silenceTimer = setTimeout(() => {
+    if (recognition && isListening) {
+      console.log('[Mic] Auto-stop: diam terlalu lama.');
+      recognition.stop();
+    }
+  }, SILENCE_TIMEOUT_MS);
+}
+
 function initSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) return null;
 
   const rec = new SpeechRecognition();
   rec.lang = 'zh-CN';
-  rec.continuous = false;       // Capture one utterance then stop
-  rec.interimResults = false;   // Only final results, no partial transcripts
+  rec.continuous = false;      // Capture one utterance then stop
+  rec.interimResults = true;   // Feature 1 Fix: true untuk responsivitas lebih baik di Android
   rec.maxAlternatives = 3;
 
   rec.onstart = () => {
     isListening = true;
+    resetSilenceTimer(); // Feature 2: Mulai timer saat mic aktif
     if (voiceRecBtn) {
       // Prominent red + blinking indicator so user clearly knows it's recording
       voiceRecBtn.classList.add('listening', 'recording');
       if (voiceBtnIcon) voiceBtnIcon.textContent = '🔴';
-      if (voiceBtnLabel) voiceBtnLabel.textContent = 'Mendengarkan...';
+      // Feature 2: Tampilkan hint auto-stop
+      if (voiceBtnLabel) voiceBtnLabel.textContent = 'Mendengarkan... (auto-stop jika diam 5 detik)';
     }
     hideSpeechFeedback();
   };
 
-  rec.onresult = (event) => {
-    // Reset button immediately so user can try again
-    resetVoiceButton();
+  rec.onsoundstart = () => {
+    resetSilenceTimer(); // Feature 2: Reset timer saat suara terdeteksi
+  };
 
-    if (event.results && event.results.length > 0) {
-      const recognizedText = event.results[0][0].transcript;
-      evaluatePronunciation(recognizedText);
+  rec.onresult = (event) => {
+    resetSilenceTimer(); // Feature 2: Reset timer saat ada hasil suara
+
+    // Cari hasil final (interimResults=true, jadi perlu cek isFinal)
+    let finalTranscript = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (event.results[i].isFinal) {
+        finalTranscript += event.results[i][0].transcript;
+      }
+    }
+
+    // Hanya evaluasi jika sudah ada hasil final
+    if (finalTranscript.trim()) {
+      // Reset button immediately so user can try again
+      resetVoiceButton();
+      clearTimeout(silenceTimer); // Bersihkan timer karena sudah ada hasil
+      evaluatePronunciation(finalTranscript.trim());
     }
   };
 
   rec.onerror = (event) => {
+    // Feature 2: Bersihkan timer agar tidak ada kebocoran memori
+    clearTimeout(silenceTimer);
     // Always reset button first to prevent it from getting stuck
     resetVoiceButton();
 
@@ -855,6 +1195,8 @@ function initSpeechRecognition() {
   };
 
   rec.onend = () => {
+    // Feature 2: Bersihkan timer agar tidak ada kebocoran memori
+    clearTimeout(silenceTimer);
     // onend always fires last (after onresult/onerror).
     // Always reset button so user can always press again.
     resetVoiceButton();
@@ -872,20 +1214,27 @@ function handleVoiceRecognitionToggle() {
 
   if (isListening && recognition) {
     // User clicked again while recording → stop it
+    clearTimeout(silenceTimer); // Feature 2: Bersihkan timer saat user stop manual
     recognition.stop();
     return;
   }
+
+  // Feature 1 Fix: Cancel TTS dulu sebelum mic aktif untuk cegah Audio Focus conflict
+  window.speechSynthesis.cancel();
 
   // Always create a fresh recognition instance to avoid
   // "already started" InvalidStateError across multiple uses
   recognition = initSpeechRecognition();
   if (!recognition) return;
 
+  // Feature 1 Fix: Bungkus recognition.start() dengan try/catch agar tidak crash
   try {
     recognition.start();
   } catch (err) {
     console.warn("Speech recognition start error:", err);
+    // Feature 1 Fix: Reset UI tombol mic jika masuk ke catch
     resetVoiceButton();
+    clearTimeout(silenceTimer);
     showToast("Gagal memulai mikrofon. Coba lagi 🎤");
   }
 }
@@ -909,6 +1258,8 @@ function evaluatePronunciation(transcript) {
   }
 
   if (isMatch) {
+    // Feature 3: Tambah +1 kata saat tebakan pengucapan suara berhasil
+    recordDailyWord();
     showSpeechFeedback(true, `Keren! Pelafalanmu tepat! ✨`);
   } else {
     showSpeechFeedback(false, `Hampir tepat! Coba dengarkan lagi suaranya dan ulangi perlahan 🎧`);
@@ -1091,6 +1442,62 @@ function setupEventListeners() {
     favModal.addEventListener('click', (e) => {
       if (e.target === favModal) {
         favModal.classList.add('hidden');
+        favModal.setAttribute('aria-hidden', 'true');
+      }
+    });
+  }
+
+  // Feature 3: Daily History Modal Triggers
+  if (historyTriggerBtn) {
+    historyTriggerBtn.addEventListener('click', () => {
+      renderHistoryModal();
+      if (historyModal) {
+        historyModal.classList.remove('hidden');
+        historyModal.setAttribute('aria-hidden', 'false');
+      }
+    });
+  }
+
+  if (closeHistoryModalBtn) {
+    closeHistoryModalBtn.addEventListener('click', () => {
+      if (historyModal) {
+        historyModal.classList.add('hidden');
+        historyModal.setAttribute('aria-hidden', 'true');
+      }
+    });
+  }
+
+  if (historyModal) {
+    historyModal.addEventListener('click', (e) => {
+      if (e.target === historyModal) {
+        historyModal.classList.add('hidden');
+        historyModal.setAttribute('aria-hidden', 'true');
+      }
+    });
+  }
+
+  // Mode Tab Switchers
+  if (tabVocabBtn) {
+    tabVocabBtn.addEventListener('click', () => switchTab('vocab'));
+  }
+
+  if (tabWritingBtn) {
+    tabWritingBtn.addEventListener('click', () => switchTab('writing'));
+  }
+
+  // Writing Mode 10x12 Actions
+  if (clearGridCanvasBtn) {
+    clearGridCanvasBtn.addEventListener('click', clearGridCanvas);
+  }
+
+  if (nextGridCharBtn) {
+    nextGridCharBtn.addEventListener('click', completeAndNextGridChar);
+  }
+
+  if (writingAudioBtn) {
+    writingAudioBtn.addEventListener('click', () => {
+      if (currentGridChar) {
+        playSpeechPronunciation(currentGridChar);
       }
     });
   }
@@ -1102,12 +1509,18 @@ function setupEventListeners() {
     });
   }
 
-  // Keyboard Shortcuts (Spacebar or Right Arrow = Next Word)
+  // Keyboard Shortcuts (Spacebar or Right Arrow = Next Word / Next Char)
   document.addEventListener('keydown', (e) => {
     if (e.code === 'Space' || e.code === 'ArrowRight') {
-      if (favModal && favModal.classList.contains('hidden')) {
+      const isFavOpen = favModal && !favModal.classList.contains('hidden');
+      const isHistoryOpen = historyModal && !historyModal.classList.contains('hidden');
+      if (!isFavOpen && !isHistoryOpen) {
         e.preventDefault();
-        handleNextWord();
+        if (writingView && !writingView.classList.contains('hidden')) {
+          completeAndNextGridChar();
+        } else {
+          handleNextWord();
+        }
       }
     }
   });
