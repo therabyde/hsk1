@@ -328,14 +328,13 @@ window.currentUtterance = null;
 let silenceTimer = null;
 const SILENCE_TIMEOUT_MS = 5500; // 5.5 seconds of silence before auto-stop
 
-// Tab Navigation & Writing Mode State
-let currentGridWord = null;
-let currentGridChar = '';
-let mizigeCanvas = null;
-let mizigeCtx = null;
-let isDrawingGrid = false;
-let lastGridX = 0;
-let lastGridY = 0;
+// Tab Navigation & Writing Mode State (One Hanzi at a Time, 5x2 Grid)
+let writingSession = {
+  hanziList: [],       // Array of { char, pinyin, meaning }
+  currentIndex: 0,     // Current Hanzi index in session
+  cellsPerHanzi: 10,   // 5x2 = 10 cells per Hanzi
+  cellDrawnStatus: {}, // key: `${hanziIdx}_${cellIdx}` -> boolean
+};
 
 // DOM Element References
 const loaderEl = document.getElementById('loading-state');
@@ -351,9 +350,14 @@ const writingTargetChar = document.getElementById('writing-target-char');
 const writingTargetPinyin = document.getElementById('writing-target-pinyin');
 const writingTargetMeaning = document.getElementById('writing-target-meaning');
 const writingAudioBtn = document.getElementById('writing-audio-btn');
-const clearGridCanvasBtn = document.getElementById('clear-grid-canvas-btn');
+const writingHanziProgress = document.getElementById('writing-hanzi-progress');
+const writingOverallProgress = document.getElementById('writing-overall-progress');
+const writingProgressFill = document.getElementById('writing-progress-fill');
+const writingGridViewport = document.getElementById('writing-grid-viewport');
+const clearActiveGridBtn = document.getElementById('clear-active-grid-btn');
+const prevGridCharBtn = document.getElementById('prev-grid-char-btn');
 const nextGridCharBtn = document.getElementById('next-grid-char-btn');
-const mizigeScrollContainer = document.getElementById('grid-canvas-scroll-container');
+const nextGridCharLabel = document.getElementById('next-grid-char-label');
 
 const pinyinEl = document.getElementById('card-pinyin');
 const meaningEl = document.getElementById('card-meaning');
@@ -469,7 +473,7 @@ function parseAndBuildVocabulary(rawText) {
     vocabularyList = shuffleArray(parsedWords);
     showState('card');
     displayCurrentWord();
-    if (!currentGridChar) pickRandomGridChar();
+    if (writingSession.hanziList.length === 0) initWritingSession();
   } else {
     buildVocabularyFromDictionary();
   }
@@ -487,7 +491,7 @@ function buildVocabularyFromDictionary() {
   vocabularyList = shuffleArray(list);
   showState('card');
   displayCurrentWord();
-  if (!currentGridChar) pickRandomGridChar();
+  if (writingSession.hanziList.length === 0) initWritingSession();
 }
 
 // Display Current Micro-Dosing Flashcard
@@ -867,10 +871,10 @@ function setTracingFeedback(state) {
   }
 }
 
-// ─── Mode Menulis Hanzi (10x12 Mi Zi Ge Canvas) ──────────────────────────────
+// ─── Mode Menulis Hanzi (One Hanzi at a Time, 5×2 Mi Zi Ge Grid) ─────────────
 
 /**
- * Tab switcher between Vocabulary mode and 10x12 Writing Practice mode.
+ * Tab switcher between Vocabulary mode and 5x2 Writing Practice mode.
  */
 function switchTab(tabName) {
   if (tabName === 'vocab') {
@@ -896,43 +900,152 @@ function switchTab(tabName) {
     if (writingView) writingView.classList.remove('hidden');
     if (vocabView) vocabView.classList.add('hidden');
 
-    // Initialize grid canvas & load character if not ready
-    if (!mizigeCtx) {
-      initGridCanvas();
-    }
-    if (!currentGridChar) {
-      pickRandomGridChar();
+    // Initialize session if empty
+    if (writingSession.hanziList.length === 0) {
+      initWritingSession();
     }
   }
 }
 
 /**
- * Pick a random HSK 1 character for 10x12 practice.
- * If word contains multiple characters, takes index 0 only as requested.
+ * Helper to pick random unique Hanzi from HSK 1 vocabulary.
  */
-function pickRandomGridChar() {
-  if (!vocabularyList || vocabularyList.length === 0) {
-    buildVocabularyFromDictionary();
+function getRandomHanziList(count) {
+  const result = [];
+  const usedChars = new Set();
+
+  // If currentWord in flashcards is active, prioritize its first character
+  if (currentWord && currentWord.hanzi) {
+    const chars = extractAllHanzi(currentWord.hanzi);
+    if (chars.length > 0) {
+      usedChars.add(chars[0]);
+      result.push({
+        char: chars[0],
+        pinyin: currentWord.pinyin,
+        meaning: currentWord.meaning
+      });
+    }
   }
 
-  const randomIndex = Math.floor(Math.random() * vocabularyList.length);
-  currentGridWord = vocabularyList[randomIndex];
+  // Pool from vocabularyList or HSK_DICTIONARY
+  const pool = (vocabularyList.length > 0)
+    ? vocabularyList
+    : Object.keys(HSK_DICTIONARY).map(k => ({ hanzi: k, ...HSK_DICTIONARY[k] }));
+  const shuffled = shuffleArray(pool);
 
-  // Extract CJK characters and pick index 0
-  const chars = extractAllHanzi(currentGridWord.hanzi);
-  currentGridChar = chars.length > 0 ? chars[0] : currentGridWord.hanzi.charAt(0);
+  for (let word of shuffled) {
+    if (result.length >= count) break;
+    const chars = extractAllHanzi(word.hanzi);
+    if (chars.length > 0 && !usedChars.has(chars[0])) {
+      usedChars.add(chars[0]);
+      result.push({
+        char: chars[0],
+        pinyin: word.pinyin,
+        meaning: word.meaning
+      });
+    }
+  }
 
-  displayGridTargetChar();
+  return result;
 }
 
 /**
- * Display the selected character, pinyin, and meaning in the hero card.
+ * Initialize a writing session.
+ * items can be:
+ * - Array of strings e.g. ['你', '我', '他']
+ * - Array of objects e.g. [{ char: '你', pinyin: 'nǐ', meaning: 'Kamu' }, ...]
+ * - Number of Hanzi (default 3)
  */
-function displayGridTargetChar() {
-  if (!currentGridWord) return;
-  if (writingTargetChar) writingTargetChar.textContent = currentGridChar;
-  if (writingTargetPinyin) writingTargetPinyin.textContent = currentGridWord.pinyin;
-  if (writingTargetMeaning) writingTargetMeaning.textContent = currentGridWord.meaning;
+function initWritingSession(items) {
+  let list = [];
+
+  if (Array.isArray(items) && items.length > 0) {
+    items.forEach(item => {
+      if (typeof item === 'string') {
+        const chars = extractAllHanzi(item);
+        const char = chars.length > 0 ? chars[0] : item.charAt(0);
+        const dictInfo = HSK_DICTIONARY[item] || HSK_DICTIONARY[char];
+        list.push({
+          char: char,
+          pinyin: dictInfo?.pinyin || char,
+          meaning: dictInfo?.meaning || 'Kosakata HSK 1'
+        });
+      } else if (typeof item === 'object' && item) {
+        const raw = item.char || item.hanzi || '';
+        const chars = extractAllHanzi(raw);
+        const char = chars.length > 0 ? chars[0] : raw.charAt(0);
+        list.push({
+          char: char,
+          pinyin: item.pinyin || HSK_DICTIONARY[char]?.pinyin || char,
+          meaning: item.meaning || HSK_DICTIONARY[char]?.meaning || 'Kosakata HSK 1'
+        });
+      }
+    });
+  } else if (typeof items === 'number' && items > 0) {
+    list = getRandomHanziList(items);
+  } else {
+    // Default session: 3 Hanzi (3 x 10 = 30 repetitions)
+    list = getRandomHanziList(3);
+  }
+
+  // Fallback if list is somehow empty
+  if (list.length === 0) {
+    list = [
+      { char: '你', pinyin: 'nǐ', meaning: 'Kamu / Anda' },
+      { char: '我', pinyin: 'wǒ', meaning: 'Saya / Aku' },
+      { char: '他', pinyin: 'tā', meaning: 'Dia (Laki-laki)' }
+    ];
+  }
+
+  writingSession.hanziList = list;
+  writingSession.currentIndex = 0;
+  writingSession.cellDrawnStatus = {};
+
+  renderWritingGrids();
+  updateWritingUI();
+}
+
+// Expose globally for testing / programmatic configuration
+window.setWritingSession = initWritingSession;
+window.writingSession = writingSession;
+
+/**
+ * Render persistent 5x2 grids for all Hanzi in the session into the viewport.
+ * Grids stay in DOM during the session so canvas drawing state is NEVER wiped!
+ */
+function renderWritingGrids() {
+  if (!writingGridViewport) return;
+  writingGridViewport.innerHTML = '';
+
+  writingSession.hanziList.forEach((hanziObj, hIdx) => {
+    const grid = document.createElement('div');
+    grid.className = `mizige-grid ${hIdx === 0 ? '' : 'hidden'}`;
+    grid.id = `mizige-grid-${hIdx}`;
+    grid.dataset.hanziIdx = hIdx;
+
+    for (let cIdx = 0; cIdx < writingSession.cellsPerHanzi; cIdx++) {
+      const cell = document.createElement('div');
+      cell.className = 'mizige-cell';
+
+      const numWatermark = document.createElement('span');
+      numWatermark.className = 'cell-num';
+      numWatermark.textContent = cIdx + 1;
+      cell.appendChild(numWatermark);
+
+      const canvas = document.createElement('canvas');
+      canvas.className = 'cell-canvas';
+      // Crisp 240x240 internal resolution (perfect for 2x retina on iPad mini 6)
+      canvas.width = 240;
+      canvas.height = 240;
+
+      attachCellCanvasEvents(canvas, hIdx, cIdx);
+
+      cell.appendChild(canvas);
+      grid.appendChild(cell);
+    }
+
+    writingGridViewport.appendChild(grid);
+  });
 }
 
 /**
@@ -944,9 +1057,9 @@ function getInkColor() {
 }
 
 /**
- * Precise canvas coordinate calculation considering container scroll offsets.
+ * Precise canvas coordinate calculation considering container layout.
  */
-function getCanvasCoords(e, canvas) {
+function getCellCoords(e, canvas) {
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width;
   const scaleY = canvas.height / rect.height;
@@ -970,109 +1083,199 @@ function getCanvasCoords(e, canvas) {
 }
 
 /**
- * Initialize 10x12 Mi Zi Ge Drawing Canvas with touch & mouse support.
+ * Attach drawing handlers to a specific cell canvas.
+ * Uses pointer and touch events with preventDefault to strictly block page scrolling.
  */
-function initGridCanvas() {
-  mizigeCanvas = document.getElementById('mizige-canvas');
-  if (!mizigeCanvas) return;
+function attachCellCanvasEvents(canvas, hIdx, cIdx) {
+  const ctx = canvas.getContext('2d');
+  let isDrawing = false;
+  let lastX = 0;
+  let lastY = 0;
 
-  mizigeCtx = mizigeCanvas.getContext('2d');
-
-  // Mouse Events
-  mizigeCanvas.addEventListener('mousedown', (e) => {
-    isDrawingGrid = true;
-    const coords = getCanvasCoords(e, mizigeCanvas);
-    lastGridX = coords.x;
-    lastGridY = coords.y;
-
-    mizigeCtx.beginPath();
-    mizigeCtx.arc(coords.x, coords.y, 1.5, 0, Math.PI * 2);
-    mizigeCtx.fillStyle = getInkColor();
-    mizigeCtx.fill();
-  });
-
-  mizigeCanvas.addEventListener('mousemove', (e) => {
-    if (!isDrawingGrid) return;
-    const coords = getCanvasCoords(e, mizigeCanvas);
-
-    mizigeCtx.beginPath();
-    mizigeCtx.moveTo(lastGridX, lastGridY);
-    mizigeCtx.lineTo(coords.x, coords.y);
-    mizigeCtx.strokeStyle = getInkColor();
-    mizigeCtx.lineWidth = 3;
-    mizigeCtx.lineCap = 'round';
-    mizigeCtx.lineJoin = 'round';
-    mizigeCtx.stroke();
-
-    lastGridX = coords.x;
-    lastGridY = coords.y;
-  });
-
-  mizigeCanvas.addEventListener('mouseup', () => { isDrawingGrid = false; });
-  mizigeCanvas.addEventListener('mouseleave', () => { isDrawingGrid = false; });
-
-  // Touch Events (Prevent scroll during active draw on canvas)
-  mizigeCanvas.addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    isDrawingGrid = true;
-    const coords = getCanvasCoords(e, mizigeCanvas);
-    lastGridX = coords.x;
-    lastGridY = coords.y;
-
-    mizigeCtx.beginPath();
-    mizigeCtx.arc(coords.x, coords.y, 1.5, 0, Math.PI * 2);
-    mizigeCtx.fillStyle = getInkColor();
-    mizigeCtx.fill();
-  }, { passive: false });
-
-  mizigeCanvas.addEventListener('touchmove', (e) => {
-    if (!isDrawingGrid) return;
-    e.preventDefault();
-    const coords = getCanvasCoords(e, mizigeCanvas);
-
-    mizigeCtx.beginPath();
-    mizigeCtx.moveTo(lastGridX, lastGridY);
-    mizigeCtx.lineTo(coords.x, coords.y);
-    mizigeCtx.strokeStyle = getInkColor();
-    mizigeCtx.lineWidth = 3;
-    mizigeCtx.lineCap = 'round';
-    mizigeCtx.lineJoin = 'round';
-    mizigeCtx.stroke();
-
-    lastGridX = coords.x;
-    lastGridY = coords.y;
-  }, { passive: false });
-
-  mizigeCanvas.addEventListener('touchend', () => { isDrawingGrid = false; });
-  mizigeCanvas.addEventListener('touchcancel', () => { isDrawingGrid = false; });
-}
-
-/**
- * Clear canvas strokes without erasing the SVG CSS background grid.
- */
-function clearGridCanvas() {
-  if (!mizigeCanvas || !mizigeCtx) return;
-  mizigeCtx.clearRect(0, 0, mizigeCanvas.width, mizigeCanvas.height);
-  showToast('🗑️ Kanvas telah dibersihkan');
-}
-
-/**
- * Complete current writing practice:
- * a. Clear canvas strokes
- * b. Pick and display a new random character
- * c. Record +1 into dailyHistory
- */
-function completeAndNextGridChar() {
-  if (mizigeCanvas && mizigeCtx) {
-    mizigeCtx.clearRect(0, 0, mizigeCanvas.width, mizigeCanvas.height);
+  function markDrawn() {
+    const key = `${hIdx}_${cIdx}`;
+    if (!writingSession.cellDrawnStatus[key]) {
+      writingSession.cellDrawnStatus[key] = true;
+      updateWritingProgress();
+    }
   }
-  pickRandomGridChar();
+
+  function startDraw(e) {
+    e.preventDefault();
+    isDrawing = true;
+    const coords = getCellCoords(e, canvas);
+    lastX = coords.x;
+    lastY = coords.y;
+
+    ctx.beginPath();
+    ctx.arc(coords.x, coords.y, 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = getInkColor();
+    ctx.fill();
+    markDrawn();
+  }
+
+  function moveDraw(e) {
+    if (!isDrawing) return;
+    e.preventDefault();
+    const coords = getCellCoords(e, canvas);
+
+    ctx.beginPath();
+    ctx.moveTo(lastX, lastY);
+    ctx.lineTo(coords.x, coords.y);
+    ctx.strokeStyle = getInkColor();
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    lastX = coords.x;
+    lastY = coords.y;
+    markDrawn();
+  }
+
+  function stopDraw() {
+    if (isDrawing) {
+      isDrawing = false;
+    }
+  }
+
+  // Pointer Events (supports Apple Pencil, Stylus, Mouse, and Finger)
+  canvas.addEventListener('pointerdown', startDraw);
+  canvas.addEventListener('pointermove', moveDraw);
+  canvas.addEventListener('pointerup', stopDraw);
+  canvas.addEventListener('pointercancel', stopDraw);
+  canvas.addEventListener('pointerleave', stopDraw);
+
+  // Fallback Touch Events with passive: false to guarantee no page scrolling on iOS Safari
+  canvas.addEventListener('touchstart', startDraw, { passive: false });
+  canvas.addEventListener('touchmove', moveDraw, { passive: false });
+  canvas.addEventListener('touchend', stopDraw);
+  canvas.addEventListener('touchcancel', stopDraw);
+}
+
+/**
+ * Update UI for the currently active Hanzi in session.
+ */
+function updateWritingUI() {
+  if (writingSession.hanziList.length === 0) return;
+
+  const active = writingSession.hanziList[writingSession.currentIndex];
+  const total = writingSession.hanziList.length;
+
+  // Update Hero Card details
+  if (writingTargetChar) writingTargetChar.textContent = active.char;
+  if (writingTargetPinyin) writingTargetPinyin.textContent = active.pinyin;
+  if (writingTargetMeaning) writingTargetMeaning.textContent = active.meaning;
+
+  // Update Hanzi Progress (e.g. "Hanzi 1 / 3")
+  if (writingHanziProgress) {
+    writingHanziProgress.textContent = `Hanzi ${writingSession.currentIndex + 1} / ${total}`;
+  }
+
+  // Update Navigation Buttons
+  if (prevGridCharBtn) {
+    prevGridCharBtn.disabled = (writingSession.currentIndex === 0);
+  }
+
+  if (nextGridCharLabel) {
+    const isLast = (writingSession.currentIndex === total - 1);
+    nextGridCharLabel.textContent = isLast ? '✓ Selesai' : 'Next →';
+  }
+
+  updateWritingProgress();
+}
+
+/**
+ * Update Overall Writing Progress across all Hanzi in the session.
+ * E.g. "16 / 30 completed"
+ */
+function updateWritingProgress() {
+  const totalCells = writingSession.hanziList.length * writingSession.cellsPerHanzi;
+  let completedCells = 0;
+  for (let key in writingSession.cellDrawnStatus) {
+    if (writingSession.cellDrawnStatus[key]) completedCells++;
+  }
+
+  if (writingOverallProgress) {
+    writingOverallProgress.textContent = `${completedCells} / ${totalCells} completed`;
+  }
+
+  if (writingProgressFill) {
+    const pct = totalCells > 0 ? Math.min(100, Math.round((completedCells / totalCells) * 100)) : 0;
+    writingProgressFill.style.width = `${pct}%`;
+  }
+}
+
+/**
+ * Switch to a specific Hanzi index without re-rendering or clearing canvases.
+ */
+function goToWritingHanzi(newIndex) {
+  if (newIndex < 0 || newIndex >= writingSession.hanziList.length) return;
+
+  // Hide current grid
+  const currentGrid = document.getElementById(`mizige-grid-${writingSession.currentIndex}`);
+  if (currentGrid) currentGrid.classList.add('hidden');
+
+  // Switch index
+  writingSession.currentIndex = newIndex;
+
+  // Show target grid
+  const targetGrid = document.getElementById(`mizige-grid-${newIndex}`);
+  if (targetGrid) targetGrid.classList.remove('hidden');
+
+  updateWritingUI();
+}
+
+/**
+ * Navigate to Previous Hanzi.
+ */
+function prevWritingHanzi() {
+  if (writingSession.currentIndex > 0) {
+    goToWritingHanzi(writingSession.currentIndex - 1);
+  }
+}
+
+/**
+ * Navigate to Next Hanzi or Finish.
+ */
+function nextWritingHanzi() {
+  if (writingSession.currentIndex < writingSession.hanziList.length - 1) {
+    goToWritingHanzi(writingSession.currentIndex + 1);
+  } else {
+    finishWritingSession();
+  }
+}
+
+/**
+ * Clear only the writing cells of the currently active Hanzi.
+ * Does NOT touch previous or other Hanzi drawings!
+ */
+function clearActiveHanziGrid() {
+  const activeGrid = document.getElementById(`mizige-grid-${writingSession.currentIndex}`);
+  if (!activeGrid) return;
+
+  const canvases = activeGrid.querySelectorAll('.cell-canvas');
+  canvases.forEach((canvas, cIdx) => {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    writingSession.cellDrawnStatus[`${writingSession.currentIndex}_${cIdx}`] = false;
+  });
+
+  updateWritingProgress();
+  const activeChar = writingSession.hanziList[writingSession.currentIndex]?.char || '';
+  showToast(`🗑️ Latihan "${activeChar}" dibersihkan`);
+}
+
+/**
+ * Complete the writing session.
+ */
+function finishWritingSession() {
   recordDailyWord();
   sessionCount++;
   if (sessionCountEl) {
     sessionCountEl.textContent = `Kata ke-${sessionCount} hari ini`;
   }
-  showToast('✨ Selesai! Karakter baru siap ditulis (+1 riwayat)');
+  showToast('🎉 Selesai! Seluruh sesi menulis tuntas (+1 riwayat)');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1485,19 +1688,24 @@ function setupEventListeners() {
     tabWritingBtn.addEventListener('click', () => switchTab('writing'));
   }
 
-  // Writing Mode 10x12 Actions
-  if (clearGridCanvasBtn) {
-    clearGridCanvasBtn.addEventListener('click', clearGridCanvas);
+  // Writing Practice 5x2 Actions
+  if (clearActiveGridBtn) {
+    clearActiveGridBtn.addEventListener('click', clearActiveHanziGrid);
+  }
+
+  if (prevGridCharBtn) {
+    prevGridCharBtn.addEventListener('click', prevWritingHanzi);
   }
 
   if (nextGridCharBtn) {
-    nextGridCharBtn.addEventListener('click', completeAndNextGridChar);
+    nextGridCharBtn.addEventListener('click', nextWritingHanzi);
   }
 
   if (writingAudioBtn) {
     writingAudioBtn.addEventListener('click', () => {
-      if (currentGridChar) {
-        playSpeechPronunciation(currentGridChar);
+      const active = writingSession.hanziList[writingSession.currentIndex];
+      if (active && active.char) {
+        playSpeechPronunciation(active.char);
       }
     });
   }
@@ -1509,18 +1717,25 @@ function setupEventListeners() {
     });
   }
 
-  // Keyboard Shortcuts (Spacebar or Right Arrow = Next Word / Next Char)
+  // Keyboard Shortcuts (Space / ArrowRight = Next, ArrowLeft = Prev)
   document.addEventListener('keydown', (e) => {
+    const isFavOpen = favModal && !favModal.classList.contains('hidden');
+    const isHistoryOpen = historyModal && !historyModal.classList.contains('hidden');
+    if (isFavOpen || isHistoryOpen) return;
+
+    const isWritingActive = writingView && !writingView.classList.contains('hidden');
+
     if (e.code === 'Space' || e.code === 'ArrowRight') {
-      const isFavOpen = favModal && !favModal.classList.contains('hidden');
-      const isHistoryOpen = historyModal && !historyModal.classList.contains('hidden');
-      if (!isFavOpen && !isHistoryOpen) {
+      e.preventDefault();
+      if (isWritingActive) {
+        nextWritingHanzi();
+      } else {
+        handleNextWord();
+      }
+    } else if (e.code === 'ArrowLeft') {
+      if (isWritingActive) {
         e.preventDefault();
-        if (writingView && !writingView.classList.contains('hidden')) {
-          completeAndNextGridChar();
-        } else {
-          handleNextWord();
-        }
+        prevWritingHanzi();
       }
     }
   });

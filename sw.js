@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hsk1-microdosing-v8';
+const CACHE_NAME = 'hsk1-microdosing-v9';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
