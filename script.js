@@ -310,15 +310,17 @@ const HSK_DICTIONARY = {
   "昨天": { pinyin: "zuótiān", meaning: "Kemarin 🕒", hint: "Hari sebelum hari ini." }
 };
 
-// App State
+// App State — Decoupled Vocabulary Library & Daily Writing Practice
 let vocabularyList = [];
-let currentIndex = 0;
-let currentWord = null;
+let vocabIndex = 0; // Independent browsing index for 📚 Kosakata (0 to vocabularyList.length - 1)
+let currentWord = null; // Currently displayed flashcard in 📚 Kosakata
 let sessionCount = 1;
 let favorites = JSON.parse(localStorage.getItem('hsk_favs') || localStorage.getItem('mandarin_chill_favs') || '[]');
-const DAILY_DOSE_SIZE = 5;
-const DAILY_DOSE_STORAGE_KEY = 'hsk_daily_dose_v1';
-let dailyDose = null;
+
+// Daily Writing Practice State (Strictly 5 vocabulary sets per day)
+const DAILY_WRITING_SETS = 5;
+const DAILY_WRITING_STORAGE_KEY = 'hsk_daily_writing_v2';
+let dailyWriting = null;
 
 // Hanzi Writer State
 let hanziWriters = []; // Array of writer instances for multi-character support
@@ -331,17 +333,18 @@ window.currentUtterance = null;
 let silenceTimer = null;
 const SILENCE_TIMEOUT_MS = 5500; // 5.5 seconds of silence before auto-stop
 
-// Tab Navigation & Writing Mode State (One Hanzi at a Time, 5x2 Grid)
+// Tab Navigation & Writing Mode State (One Hanzi at a Time, Responsive Mi Zi Ge Grid)
 let writingSession = {
-  hanziList: [],       // Array of { char, pinyin, meaning }
-  currentIndex: 0,     // Current Hanzi index in session
-  cellsPerHanzi: 10,   // 5x2 = 10 cells per Hanzi
+  hanziList: [],           // Array of { char, pinyin, meaning }
+  currentIndex: 0,         // Current Hanzi index within the set
+  cellsPerHanzi: 10,       // 10 cells per Hanzi
   cellCompletedStatus: {}, // key: `${hanziIdx}_${cellIdx}` -> validated HanziWriter quiz completion
   completionRecorded: false,
 };
 let writingCellWriters = {};
 let writingGridResizeObserver = null;
 let writingResizeFrame = null;
+let activeWritingLayout = null; // { cols, rows, cellSize, gap, id }
 
 // DOM Element References
 const loaderEl = document.getElementById('loading-state');
@@ -357,6 +360,7 @@ const writingTargetChar = document.getElementById('writing-target-char');
 const writingTargetPinyin = document.getElementById('writing-target-pinyin');
 const writingTargetMeaning = document.getElementById('writing-target-meaning');
 const writingAudioBtn = document.getElementById('writing-audio-btn');
+const writingSetProgress = document.getElementById('writing-set-progress');
 const writingHanziProgress = document.getElementById('writing-hanzi-progress');
 const writingOverallProgress = document.getElementById('writing-overall-progress');
 const writingProgressFill = document.getElementById('writing-progress-fill');
@@ -478,11 +482,12 @@ function parseAndBuildVocabulary(rawText) {
   });
 
   if (parsedWords.length > 0) {
-    vocabularyList = shuffleArray(parsedWords);
-    initializeDailyDose();
+    vocabularyList = parsedWords;
+    initializeDailyWriting();
     showState('card');
-    displayCurrentWord();
-    if (writingSession.hanziList.length === 0) initWritingSession();
+    vocabIndex = 0;
+    displayCurrentVocabWord();
+    loadWritingForCurrentSet();
   } else {
     buildVocabularyFromDictionary();
   }
@@ -497,32 +502,77 @@ function buildVocabularyFromDictionary() {
     hint: HSK_DICTIONARY[hanzi].hint
   }));
   
-  vocabularyList = shuffleArray(list);
-  initializeDailyDose();
+  vocabularyList = list;
+  initializeDailyWriting();
   showState('card');
-  displayCurrentWord();
-  if (writingSession.hanziList.length === 0) initWritingSession();
+  vocabIndex = 0;
+  displayCurrentVocabWord();
+  loadWritingForCurrentSet();
 }
 
 function getTodayKey() {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
-function initializeDailyDose() {
+/**
+ * Deterministic pseudo-random integer generator based on date seed string.
+ * Ensures the 5 daily writing sets are consistent for a given calendar date.
+ */
+function getDeterministicDailyWords(sourceList, count) {
+  if (!sourceList || sourceList.length === 0) return [];
   const today = getTodayKey();
-  const saved = JSON.parse(localStorage.getItem(DAILY_DOSE_STORAGE_KEY) || 'null');
-  if (saved?.date === today && Array.isArray(saved.words) && saved.words.length === DAILY_DOSE_SIZE) {
-    dailyDose = saved;
-  } else {
-    const selected = [];
-    const usedWords = new Set();
-    // vocabularyList is already shuffled by the existing selection logic.
-    vocabularyList.forEach(word => {
-      if (selected.length >= DAILY_DOSE_SIZE || usedWords.has(word.hanzi)) return;
-      usedWords.add(word.hanzi);
+  
+  let seed = 0;
+  for (let i = 0; i < today.length; i++) {
+    seed = ((seed << 5) - seed + today.charCodeAt(i)) | 0;
+  }
+  
+  // Mulberry32 PRNG
+  function mulberry32() {
+    seed |= 0;
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  const pool = [...sourceList];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(mulberry32() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+
+  const selected = [];
+  const used = new Set();
+  for (const word of pool) {
+    if (selected.length >= count) break;
+    if (!used.has(word.hanzi)) {
+      used.add(word.hanzi);
       selected.push(word);
-    });
-    dailyDose = {
+    }
+  }
+  return selected;
+}
+
+/**
+ * Initialize 5 Daily Writing sets strictly for Writing Practice.
+ */
+function initializeDailyWriting() {
+  const today = getTodayKey();
+  const saved = JSON.parse(localStorage.getItem(DAILY_WRITING_STORAGE_KEY) || 'null');
+  
+  if (saved && saved.date === today && Array.isArray(saved.words) && saved.words.length === DAILY_WRITING_SETS) {
+    dailyWriting = saved;
+  } else {
+    const pool = (vocabularyList.length > 0)
+      ? vocabularyList
+      : Object.keys(HSK_DICTIONARY).map(k => ({ hanzi: k, ...HSK_DICTIONARY[k] }));
+    const selected = getDeterministicDailyWords(pool, DAILY_WRITING_SETS);
+    dailyWriting = {
       date: today,
       words: selected,
       currentSetIndex: 0,
@@ -530,74 +580,67 @@ function initializeDailyDose() {
       writingStates: {},
       streakRecorded: false
     };
-    saveDailyDose();
+    saveDailyWriting();
   }
 
-  currentIndex = Math.min(Math.max(dailyDose.currentSetIndex || 0, 0), dailyDose.words.length - 1);
-}
-
-function saveDailyDose() {
-  if (!dailyDose) return;
-  dailyDose.currentSetIndex = currentIndex;
-  localStorage.setItem(DAILY_DOSE_STORAGE_KEY, JSON.stringify(dailyDose));
-}
-
-function getCompletedSetCount() {
-  return dailyDose ? Object.keys(dailyDose.completedSets || {}).length : 0;
-}
-
-function updateDailyDoseUI() {
-  if (!dailyDose || !sessionCountEl) return;
-  const completed = getCompletedSetCount();
-  sessionCountEl.textContent = `Daily Dose · Kata ${currentIndex + 1} / ${DAILY_DOSE_SIZE} · ${completed} / ${DAILY_DOSE_SIZE} selesai`;
-  if (prevWordBtn) prevWordBtn.disabled = currentIndex === 0;
-  if (nextBtn) {
-    const isLast = currentIndex === DAILY_DOSE_SIZE - 1;
-    const mainLabel = nextBtn.querySelector('.btn-main-text');
-    const subLabel = nextBtn.querySelector('.btn-subtext');
-    if (mainLabel) mainLabel.textContent = isLast ? 'Kembali ke Set 1 ↺' : 'Set Berikutnya →';
-    if (subLabel) subLabel.textContent = `Today's Dose · ${currentIndex + 1} / ${DAILY_DOSE_SIZE}`;
+  if (typeof dailyWriting.currentSetIndex !== 'number' || dailyWriting.currentSetIndex < 0 || dailyWriting.currentSetIndex >= DAILY_WRITING_SETS) {
+    dailyWriting.currentSetIndex = 0;
   }
+}
+
+function saveDailyWriting() {
+  if (!dailyWriting) return;
+  localStorage.setItem(DAILY_WRITING_STORAGE_KEY, JSON.stringify(dailyWriting));
+}
+
+function getCompletedWritingSetCount() {
+  return dailyWriting ? Object.keys(dailyWriting.completedSets || {}).length : 0;
 }
 
 function saveActiveWritingState() {
-  if (!dailyDose || !currentWord || writingSession.hanziList.length === 0) return;
-  dailyDose.writingStates[currentIndex] = {
+  if (!dailyWriting || writingSession.hanziList.length === 0) return;
+  dailyWriting.writingStates[dailyWriting.currentSetIndex] = {
     currentIndex: writingSession.currentIndex,
     cellCompletedStatus: { ...writingSession.cellCompletedStatus },
     completionRecorded: writingSession.completionRecorded
   };
-  saveDailyDose();
+  saveDailyWriting();
 }
 
 function loadWritingForCurrentSet() {
-  if (!dailyDose || !currentWord) return;
-  const savedState = dailyDose.writingStates[currentIndex];
-  initWritingSession([currentWord], savedState);
+  if (!dailyWriting || !dailyWriting.words || dailyWriting.words.length === 0) return;
+  const currentSetWord = dailyWriting.words[dailyWriting.currentSetIndex];
+  if (!currentSetWord) return;
+  
+  const savedState = dailyWriting.writingStates[dailyWriting.currentSetIndex];
+  initWritingSession([currentSetWord], savedState);
 }
 
-function markCurrentSetComplete() {
-  if (!dailyDose || dailyDose.completedSets[currentIndex]) return;
-  dailyDose.completedSets[currentIndex] = true;
+function markCurrentWritingSetComplete() {
+  if (!dailyWriting) return;
+  const currentSetIdx = dailyWriting.currentSetIndex;
+  dailyWriting.completedSets[currentSetIdx] = true;
   saveActiveWritingState();
-  updateDailyDoseUI();
+  updateWritingUI();
 
-  if (getCompletedSetCount() === DAILY_DOSE_SIZE && !dailyDose.streakRecorded) {
-    dailyDose.streakRecorded = true;
-    saveDailyDose();
-    recordDailyWord();
-    recordWritingCompletion();
-    showToast('🎉 Daily Dose 5 / 5 selesai! Streak diperbarui.');
+  const completedCount = getCompletedWritingSetCount();
+
+  if (completedCount === DAILY_WRITING_SETS && !dailyWriting.streakRecorded) {
+    dailyWriting.streakRecorded = true;
+    saveDailyWriting();
+    recordWritingCompletion(); // Only updates streak after 5 / 5 sets are validated
+    showToast('🎉 Latihan Menulis 5 / 5 selesai! Streak diperbarui.');
   } else {
-    showToast(`✓ Set ${currentIndex + 1} selesai (${getCompletedSetCount()} / ${DAILY_DOSE_SIZE})`);
+    showToast(`✓ Kata ${currentSetIdx + 1} selesai (${completedCount} / ${DAILY_WRITING_SETS})`);
   }
 }
 
-// Display Current Micro-Dosing Flashcard
-function displayCurrentWord() {
-  if (!dailyDose || dailyDose.words.length === 0) return;
+// ─── Menu 📚 Kosakata: Unrestricted Vocabulary Library Browsing ──────────────
 
-  currentWord = dailyDose.words[currentIndex];
+function displayCurrentVocabWord() {
+  if (!vocabularyList || vocabularyList.length === 0) return;
+
+  currentWord = vocabularyList[vocabIndex];
 
   // Update DOM with smooth transitions
   if (cardEl) {
@@ -611,10 +654,10 @@ function displayCurrentWord() {
   if (hintEl) hintEl.textContent = currentWord.hint || "Satu kata per waktu ☕";
   if (hanziEl) hanziEl.textContent = currentWord.hanzi;
 
-  // Always reset answers to blurred by default for the new card
+  // Always reset answers to blurred by default for new card
   obscureAll();
 
-  // Update Hanzi Writer tracing board with new character
+  // Update Hanzi Writer interactive tracing board with new character
   updateHanziWriter(currentWord.hanzi);
 
   // Hide Speech Feedback Box for new word
@@ -622,25 +665,42 @@ function displayCurrentWord() {
 
   // Check Favorite State
   updateFavHeartState();
-  updateDailyDoseUI();
+  updateVocabUI();
 }
 
-// Daily Dose navigation: the five selected words are fixed for the current day.
+function updateVocabUI() {
+  if (!vocabularyList || vocabularyList.length === 0) return;
+
+  // Zen bar word counter for Vocabulary Library
+  if (sessionCountEl) {
+    sessionCountEl.textContent = `Kosakata · Kata ke-${vocabIndex + 1} / ${vocabularyList.length}`;
+  }
+
+  // Previous button: disabled only on very first word
+  if (prevWordBtn) {
+    prevWordBtn.disabled = (vocabIndex === 0);
+  }
+
+  // Next button: always standard vocabulary browsing forward
+  if (nextBtn) {
+    const mainLabel = nextBtn.querySelector('.btn-main-text');
+    const subLabel = nextBtn.querySelector('.btn-subtext');
+    if (mainLabel) mainLabel.textContent = 'Kata Berikutnya →';
+    if (subLabel) subLabel.textContent = `Kosakata ${vocabIndex + 1} / ${vocabularyList.length}`;
+  }
+}
+
 function handleNextWord() {
-  saveActiveWritingState();
-  currentIndex = (currentIndex + 1) % DAILY_DOSE_SIZE;
-  saveDailyDose();
-  displayCurrentWord();
-  loadWritingForCurrentSet();
+  if (!vocabularyList || vocabularyList.length === 0) return;
+  vocabIndex = (vocabIndex + 1) % vocabularyList.length;
+  displayCurrentVocabWord();
+  recordDailyWord();
 }
 
 function handlePreviousWord() {
-  if (!dailyDose || currentIndex === 0) return;
-  saveActiveWritingState();
-  currentIndex -= 1;
-  saveDailyDose();
-  displayCurrentWord();
-  loadWritingForCurrentSet();
+  if (!vocabularyList || vocabIndex === 0) return;
+  vocabIndex -= 1;
+  displayCurrentVocabWord();
 }
 
 // Day Streak Tracker Logic (localStorage based)
@@ -974,7 +1034,12 @@ function setTracingFeedback(state) {
 /**
  * Tab switcher between Vocabulary mode and 5x2 Writing Practice mode.
  */
+/**
+ * Tab switcher between Vocabulary mode and Daily Writing Practice mode.
+ */
 function switchTab(tabName) {
+  const appContainer = document.querySelector('.app-container');
+
   if (tabName === 'vocab') {
     if (tabVocabBtn) {
       tabVocabBtn.classList.add('active');
@@ -986,6 +1051,10 @@ function switchTab(tabName) {
     }
     if (vocabView) vocabView.classList.remove('hidden');
     if (writingView) writingView.classList.add('hidden');
+    if (appContainer) appContainer.classList.remove('writing-tab-active');
+
+    // Restore Vocabulary Library counter in zen-bar
+    updateVocabUI();
   } else if (tabName === 'writing') {
     if (tabWritingBtn) {
       tabWritingBtn.classList.add('active');
@@ -997,12 +1066,21 @@ function switchTab(tabName) {
     }
     if (writingView) writingView.classList.remove('hidden');
     if (vocabView) vocabView.classList.add('hidden');
+    if (appContainer) appContainer.classList.add('writing-tab-active');
 
-    // Initialize session if empty
-    if (writingSession.hanziList.length === 0) {
-      initWritingSession();
+    // Ensure Daily Writing session is loaded
+    if (!dailyWriting) {
+      initializeDailyWriting();
     }
-    requestAnimationFrame(() => mountWritingGrid(writingSession.currentIndex));
+    if (writingSession.hanziList.length === 0) {
+      loadWritingForCurrentSet();
+    } else {
+      updateWritingUI();
+    }
+
+    requestAnimationFrame(() => {
+      mountWritingGrid(writingSession.currentIndex, true);
+    });
   }
 }
 
@@ -1013,7 +1091,6 @@ function getRandomHanziList(count) {
   const result = [];
   const usedChars = new Set();
 
-  // If a flashcard word is active, include every Hanzi in that word.
   if (currentWord && currentWord.hanzi) {
     const chars = extractAllHanzi(currentWord.hanzi);
     chars.forEach(char => {
@@ -1026,7 +1103,6 @@ function getRandomHanziList(count) {
     });
   }
 
-  // Pool from vocabularyList or HSK_DICTIONARY
   const pool = (vocabularyList.length > 0)
     ? vocabularyList
     : Object.keys(HSK_DICTIONARY).map(k => ({ hanzi: k, ...HSK_DICTIONARY[k] }));
@@ -1047,11 +1123,7 @@ function getRandomHanziList(count) {
 }
 
 /**
- * Initialize a writing session.
- * items can be:
- * - Array of strings e.g. ['你', '我', '他']
- * - Array of objects e.g. [{ char: '你', pinyin: 'nǐ', meaning: 'Kamu' }, ...]
- * - Number of Hanzi (default 3)
+ * Initialize a writing session for the given items (multi-Hanzi supported).
  */
 function initWritingSession(items, savedState = null) {
   let list = [];
@@ -1081,11 +1153,9 @@ function initWritingSession(items, savedState = null) {
   } else if (typeof items === 'number' && items > 0) {
     list = getRandomHanziList(items);
   } else {
-    // Default session practices every Hanzi in the current vocabulary word.
     list = getRandomHanziList(currentWord ? extractAllHanzi(currentWord.hanzi).length : 3);
   }
 
-  // Fallback if list is somehow empty
   if (list.length === 0) {
     list = [
       { char: '你', pinyin: 'nǐ', meaning: 'Kamu / Anda' },
@@ -1107,13 +1177,67 @@ function initWritingSession(items, savedState = null) {
   updateWritingUI();
 }
 
-// Expose globally for testing / programmatic configuration
 window.setWritingSession = initWritingSession;
 window.writingSession = writingSession;
 
 /**
- * Render persistent 5x2 grids for all Hanzi in the session into the viewport.
- * Grids stay in DOM during the session so canvas drawing state is NEVER wiped!
+ * Dynamic layout algorithm: determines whether 5x2, 3x4, or 2x5 produces
+ * the largest square writing cell that fits 100% within the container
+ * without scrolling. Especially critical for Apple Pencil on iPad mini 6 portrait.
+ */
+function computeOptimalWritingLayout(containerWidth, containerHeight) {
+  const gap = 10;
+  const w = Math.max(120, containerWidth - 8);
+  const h = Math.max(120, containerHeight - 8);
+
+  const candidates = [
+    { cols: 5, rows: 2, id: 'grid-5x2' },
+    { cols: 3, rows: 4, id: 'grid-3x4' },
+    { cols: 2, rows: 5, id: 'grid-2x5' }
+  ];
+
+  let bestLayout = candidates[0];
+  let maxCellSize = 0;
+
+  candidates.forEach(layout => {
+    const availableW = w - (layout.cols - 1) * gap;
+    const availableH = h - (layout.rows - 1) * gap;
+    const sizeByW = availableW / layout.cols;
+    const sizeByH = availableH / layout.rows;
+    const cellSize = Math.floor(Math.min(sizeByW, sizeByH));
+
+    if (cellSize > maxCellSize) {
+      maxCellSize = cellSize;
+      bestLayout = layout;
+    }
+  });
+
+  const finalCellSize = Math.max(48, Math.min(260, maxCellSize));
+
+  return {
+    ...bestLayout,
+    cellSize: finalCellSize,
+    gap
+  };
+}
+
+function applyWritingGridLayout(layout) {
+  if (!writingGridViewport) return;
+  activeWritingLayout = layout;
+  const grids = writingGridViewport.querySelectorAll('.mizige-grid');
+  grids.forEach(grid => {
+    grid.style.setProperty('--grid-cols', layout.cols);
+    grid.style.setProperty('--grid-rows', layout.rows);
+    grid.style.setProperty('--cell-size', `${layout.cellSize}px`);
+    grid.style.setProperty('--grid-gap', `${layout.gap}px`);
+    grid.classList.remove('grid-5x2', 'grid-3x4', 'grid-2x5');
+    grid.classList.add(layout.id);
+  });
+}
+
+/**
+ * Render responsive grids for all Hanzi in the session into the viewport.
+ * Includes 10 active cells + 2 placeholders (displayed in 3x4 layout).
  */
 function renderWritingGrids() {
   if (!writingGridViewport) return;
@@ -1125,6 +1249,7 @@ function renderWritingGrids() {
     grid.id = `mizige-grid-${hIdx}`;
     grid.dataset.hanziIdx = hIdx;
 
+    // 10 active writing cells
     for (let cIdx = 0; cIdx < writingSession.cellsPerHanzi; cIdx++) {
       const cell = document.createElement('div');
       cell.className = 'mizige-cell';
@@ -1145,24 +1270,27 @@ function renderWritingGrids() {
       grid.appendChild(cell);
     }
 
+    // 2 subtle placeholder cells for 3x4 layout (rows 4 cols 2 & 3)
+    for (let pIdx = 0; pIdx < 2; pIdx++) {
+      const placeholder = document.createElement('div');
+      placeholder.className = 'mizige-cell cell-placeholder';
+      placeholder.setAttribute('aria-hidden', 'true');
+      grid.appendChild(placeholder);
+    }
+
     writingGridViewport.appendChild(grid);
   });
 
   initWritingCellWriters();
 }
 
-/**
- * Mount Hanzi Writer only after its cell has a real, visible layout size.
- * Its internal SVG must use the same dimensions as the host element because
- * those dimensions are also the coordinate system used by the stroke quiz.
- */
 function initWritingCellWriters() {
   if (typeof HanziWriter === 'undefined') {
     showToast('Latihan goresan belum siap. Periksa koneksi lalu coba lagi.');
     return;
   }
   observeWritingGridResize();
-  mountWritingGrid(writingSession.currentIndex);
+  mountWritingGrid(writingSession.currentIndex, true);
 }
 
 function mountWritingGrid(hIdx, forceRemount = false) {
@@ -1172,6 +1300,15 @@ function mountWritingGrid(hIdx, forceRemount = false) {
   const hanziObj = writingSession.hanziList[hIdx];
   if (!hanziObj) return;
 
+  // Measure viewport and apply optimal layout
+  if (writingGridViewport) {
+    const vpRect = writingGridViewport.getBoundingClientRect();
+    if (vpRect.width > 0 && vpRect.height > 0) {
+      const layout = computeOptimalWritingLayout(vpRect.width, vpRect.height);
+      applyWritingGridLayout(layout);
+    }
+  }
+
   for (let cIdx = 0; cIdx < writingSession.cellsPerHanzi; cIdx++) {
     const key = `${hIdx}_${cIdx}`;
     const host = document.getElementById(`writing-cell-${hIdx}-${cIdx}`);
@@ -1180,7 +1317,6 @@ function mountWritingGrid(hIdx, forceRemount = false) {
     const rect = host.getBoundingClientRect();
     const width = Math.round(rect.width);
     const height = Math.round(rect.height);
-    // A hidden grid has no usable coordinate system; mount it when navigated to.
     if (width < 1 || height < 1) continue;
 
     const existing = writingCellWriters[key];
@@ -1219,7 +1355,7 @@ function observeWritingGridResize() {
   if (!writingGridViewport || typeof ResizeObserver === 'undefined' || writingGridResizeObserver) return;
   writingGridResizeObserver = new ResizeObserver(() => {
     cancelAnimationFrame(writingResizeFrame);
-    writingResizeFrame = requestAnimationFrame(() => mountWritingGrid(writingSession.currentIndex));
+    writingResizeFrame = requestAnimationFrame(() => mountWritingGrid(writingSession.currentIndex, true));
   });
   writingGridResizeObserver.observe(writingGridViewport);
 }
@@ -1250,49 +1386,63 @@ function startWritingCellQuiz(writer, hIdx, cIdx) {
 }
 
 /**
- * Update UI for the currently active Hanzi in session.
+ * Update UI for the currently active Hanzi in Daily Writing session.
  */
 function updateWritingUI() {
   if (writingSession.hanziList.length === 0) return;
 
   const active = writingSession.hanziList[writingSession.currentIndex];
-  const total = writingSession.hanziList.length;
+  const totalHanziInSet = writingSession.hanziList.length;
+  const currentSetIdx = dailyWriting ? dailyWriting.currentSetIndex : 0;
 
   // Update Hero Card details
   if (writingTargetChar) writingTargetChar.textContent = active.char;
   if (writingTargetPinyin) writingTargetPinyin.textContent = active.pinyin;
   if (writingTargetMeaning) writingTargetMeaning.textContent = active.meaning;
 
-  // Update Hanzi Progress (e.g. "Hanzi 1 / 3")
+  // Update Set Progress (e.g. "Kata 1 / 5")
+  if (writingSetProgress) {
+    writingSetProgress.textContent = `Kata ${currentSetIdx + 1} / ${DAILY_WRITING_SETS}`;
+  }
+
+  // Update Hanzi Progress (e.g. "Hanzi 1 / 3" or "Hanzi 1 / 1")
   if (writingHanziProgress) {
-    writingHanziProgress.textContent = `Hanzi ${writingSession.currentIndex + 1} / ${total}`;
+    writingHanziProgress.textContent = `Hanzi ${writingSession.currentIndex + 1} / ${totalHanziInSet}`;
   }
 
   // Update Navigation Buttons
   if (prevGridCharBtn) {
-    prevGridCharBtn.disabled = (writingSession.currentIndex === 0);
+    // Disabled only if at very first Hanzi of very first set
+    prevGridCharBtn.disabled = (writingSession.currentIndex === 0 && currentSetIdx === 0);
   }
 
   if (nextGridCharLabel) {
-    // "✓ Selesai" ONLY when viewing the LAST vocabulary set AND that set is complete.
-    // Use DAILY_DOSE_SIZE (constant) instead of dailyDose.words.length for robustness.
-    // Check both persisted completion (completedSets) and live cell state
-    // (isWritingSessionComplete) so the label updates immediately after the last
-    // cell is validated — before the user clicks the button.
-    const currentSetCompleted =
-      Boolean(dailyDose?.completedSets?.[currentIndex]) || isWritingSessionComplete();
-    const isLastDailySet = currentIndex === DAILY_DOSE_SIZE - 1;
-    nextGridCharLabel.textContent = (isLastDailySet && currentSetCompleted)
-      ? '✓ Selesai'
-      : 'Next →';
+    // Requirements:
+    // Jika current set selesai tetapi masih ada set berikutnya: button harus: Next →
+    // HANYA pada Set 5 / 5 setelah seluruh writing selesai: button menjadi: ✓ Selesai
+    // Jangan menampilkan "Selesai" pada Set 1–4.
+    const isCurrentSetDone = Boolean(dailyWriting?.completedSets?.[currentSetIdx]) || isWritingSessionComplete();
+    const isLastSet = (currentSetIdx === DAILY_WRITING_SETS - 1);
+    const allSetsDone = (getCompletedWritingSetCount() === DAILY_WRITING_SETS) || (isLastSet && isCurrentSetDone && getCompletedWritingSetCount() >= DAILY_WRITING_SETS - 1);
+
+    if (isLastSet && allSetsDone) {
+      nextGridCharLabel.textContent = '✓ Selesai';
+    } else {
+      nextGridCharLabel.textContent = 'Next →';
+    }
   }
 
   updateWritingProgress();
+
+  // If in Writing mode, also update zen bar stats
+  if (writingView && !writingView.classList.contains('hidden') && sessionCountEl) {
+    const completed = getCompletedWritingSetCount();
+    sessionCountEl.textContent = `Daily Writing · Kata ${currentSetIdx + 1} / ${DAILY_WRITING_SETS} · ${completed} / ${DAILY_WRITING_SETS} selesai`;
+  }
 }
 
 /**
- * Update Overall Writing Progress across all Hanzi in the session.
- * E.g. "16 / 30 completed"
+ * Update Overall Writing Progress across all Hanzi in current set.
  */
 function updateWritingProgress() {
   const totalCells = writingSession.hanziList.length * writingSession.cellsPerHanzi;
@@ -1317,77 +1467,88 @@ function isWritingSessionComplete() {
 }
 
 /**
- * Switch to a specific Hanzi index without re-rendering or clearing canvases.
+ * Switch to a specific Hanzi index within the current word set.
  */
 function goToWritingHanzi(newIndex) {
   if (newIndex < 0 || newIndex >= writingSession.hanziList.length) return;
 
-  // Hide current grid
   const currentGrid = document.getElementById(`mizige-grid-${writingSession.currentIndex}`);
   if (currentGrid) currentGrid.classList.add('hidden');
 
-  // Switch index
   writingSession.currentIndex = newIndex;
 
-  // Show target grid
   const targetGrid = document.getElementById(`mizige-grid-${newIndex}`);
   if (targetGrid) targetGrid.classList.remove('hidden');
 
-  // The newly visible grid now has measurable dimensions for its writers.
-  requestAnimationFrame(() => mountWritingGrid(newIndex));
-
+  requestAnimationFrame(() => mountWritingGrid(newIndex, true));
   updateWritingUI();
 }
 
 /**
- * Navigate to Previous Hanzi.
+ * Navigate to Previous Hanzi (or Previous Set if on first Hanzi).
  */
 function prevWritingHanzi() {
   if (writingSession.currentIndex > 0) {
     goToWritingHanzi(writingSession.currentIndex - 1);
+    return;
+  }
+  if (dailyWriting && dailyWriting.currentSetIndex > 0) {
+    saveActiveWritingState();
+    dailyWriting.currentSetIndex -= 1;
+    saveDailyWriting();
+    loadWritingForCurrentSet();
   }
 }
 
 /**
- * Navigate to Next Hanzi or Finish.
+ * Navigate to Next Hanzi or Next Set or Finish.
  */
 function nextWritingHanzi() {
-  const currentSetCompleted =
-    Boolean(dailyDose?.completedSets?.[currentIndex]) || isWritingSessionComplete();
-  const isLastDailySet = currentIndex === DAILY_DOSE_SIZE - 1;
+  const currentSetIdx = dailyWriting ? dailyWriting.currentSetIndex : 0;
+  const isCurrentSetDone = Boolean(dailyWriting?.completedSets?.[currentSetIdx]) || isWritingSessionComplete();
 
-  if (currentSetCompleted) {
-    // Record completion if all cells are done and not yet persisted.
+  if (isCurrentSetDone) {
     if (!writingSession.completionRecorded && isWritingSessionComplete()) {
-      finishWritingSession(); // marks set, triggers streak on last set, shows toast
+      finishWritingSession();
     }
-    // Advance to next vocabulary set unless this is the last one.
-    if (!isLastDailySet) {
-      handleNextWord();
+
+    if (currentSetIdx < DAILY_WRITING_SETS - 1) {
+      saveActiveWritingState();
+      dailyWriting.currentSetIndex += 1;
+      saveDailyWriting();
+      loadWritingForCurrentSet();
+      return;
     }
-    // If last set: completion was already handled above (or was already recorded).
-    return;
+
+    // On Set 5 / 5
+    if (currentSetIdx === DAILY_WRITING_SETS - 1) {
+      if (getCompletedWritingSetCount() === DAILY_WRITING_SETS) {
+        showToast('🎉 Selamat! Seluruh 5 set Latihan Menulis hari ini telah selesai!');
+      } else {
+        showToast(`Kata 5 selesai. Selesaikan set lainnya (${getCompletedWritingSetCount()} / ${DAILY_WRITING_SETS})`);
+      }
+      return;
+    }
   }
 
-  // Set not yet complete — navigate to next Hanzi within this set.
+  // Set not yet complete: advance to next Hanzi in multi-Hanzi word if possible
   if (writingSession.currentIndex < writingSession.hanziList.length - 1) {
     goToWritingHanzi(writingSession.currentIndex + 1);
     return;
   }
 
-  // On the last Hanzi with an incomplete set — prompt the user to finish strokes.
+  // On the last Hanzi of incomplete set: prompt user
   finishWritingSession();
 }
 
 /**
- * Clear only the writing cells of the currently active Hanzi.
- * Does NOT touch previous or other Hanzi drawings!
+ * Clear writing cells of the active Hanzi.
  */
 function clearActiveHanziGrid() {
   const activeGrid = document.getElementById(`mizige-grid-${writingSession.currentIndex}`);
   if (!activeGrid) return;
 
-  const cells = activeGrid.querySelectorAll('.mizige-cell');
+  const cells = activeGrid.querySelectorAll('.mizige-cell:not(.cell-placeholder)');
   cells.forEach((cell, cIdx) => {
     const key = `${writingSession.currentIndex}_${cIdx}`;
     writingSession.cellCompletedStatus[key] = false;
@@ -1404,14 +1565,19 @@ function clearActiveHanziGrid() {
     }
   });
 
+  writingSession.completionRecorded = false;
+  if (dailyWriting && dailyWriting.completedSets) {
+    delete dailyWriting.completedSets[dailyWriting.currentSetIndex];
+  }
   updateWritingProgress();
   saveActiveWritingState();
+  updateWritingUI();
   const activeChar = writingSession.hanziList[writingSession.currentIndex]?.char || '';
   showToast(`🗑️ Latihan "${activeChar}" dibersihkan`);
 }
 
 /**
- * Complete the writing session.
+ * Complete the writing session for the current word set.
  */
 function finishWritingSession() {
   const totalCells = writingSession.hanziList.length * writingSession.cellsPerHanzi;
@@ -1421,12 +1587,11 @@ function finishWritingSession() {
     return;
   }
   if (writingSession.completionRecorded) {
-    showToast('Set ini sudah selesai. Pilih set lain untuk melanjutkan.');
     return;
   }
   writingSession.completionRecorded = true;
   saveActiveWritingState();
-  markCurrentSetComplete();
+  markCurrentWritingSetComplete();
   updateWritingUI();
 }
 
@@ -1889,9 +2054,11 @@ function setupEventListeners() {
         handleNextWord();
       }
     } else if (e.code === 'ArrowLeft') {
+      e.preventDefault();
       if (isWritingActive) {
-        e.preventDefault();
         prevWritingHanzi();
+      } else {
+        handlePreviousWord();
       }
     }
   });

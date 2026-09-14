@@ -172,12 +172,12 @@
 
         <!-- CARD FOOTER ACTIONS -->
         <div class="card-footer">
-          <button id="prev-word-btn" class="prev-set-btn" title="Set sebelumnya" disabled>
-            <span>← Previous</span>
+          <button id="prev-word-btn" class="prev-set-btn" title="Kata sebelumnya" disabled>
+            <span>← Sebelumnya</span>
           </button>
           <button id="next-word-btn" class="next-btn primary-glow">
-            <span class="btn-main-text">Set Berikutnya →</span>
-            <span class="btn-subtext">Today's Dose · 1 / 5</span>
+            <span class="btn-main-text">Kata Berikutnya →</span>
+            <span class="btn-subtext">Kosakata 1 / 150</span>
           </button>
         </div>
 
@@ -210,8 +210,8 @@
 
     </main>
 
-    <!-- TAB 2: WRITING PRACTICE (One Hanzi at a Time, 5x2 Grid) -->
-    <section id="writing-view" class="writing-mode-section tab-content hidden" aria-label="Mode Menulis Hanzi 5x2">
+    <!-- TAB 2: WRITING PRACTICE (Daily Dose: 5 Vocabulary Sets, 10 Repetitions) -->
+    <section id="writing-view" class="writing-mode-section tab-content hidden" aria-label="Mode Menulis Hanzi">
       
       <!-- Top Target Character Banner & Progress -->
       <div class="writing-hero-card">
@@ -228,7 +228,7 @@
                 </button>
               </div>
               <p id="writing-target-meaning" class="target-meaning">Kamu / Anda</p>
-              <span class="target-subhint">Ulangi penulisan 10x pada kotak 5×2 di bawah ✍️</span>
+              <span class="target-subhint">Ulangi penulisan 10x pada kotak di bawah ✍️</span>
             </div>
           </div>
         </div>
@@ -236,6 +236,7 @@
         <!-- Dual Progress Indicators -->
         <div class="writing-progress-panel">
           <div class="progress-badges-row">
+            <span class="progress-pill dose-pill" id="writing-set-progress">Kata 1 / 5</span>
             <span class="progress-pill" id="writing-hanzi-progress">Hanzi 1 / 3</span>
             <span class="progress-pill highlight" id="writing-overall-progress">0 / 30 completed</span>
           </div>
@@ -245,9 +246,9 @@
         </div>
       </div>
 
-      <!-- 5x2 Non-Scrolling Writing Grid Viewport -->
+      <!-- Non-Scrolling Writing Grid Viewport -->
       <div class="writing-grid-viewport" id="writing-grid-viewport">
-        <!-- Persistent 5x2 grid for each Hanzi in the session is managed here -->
+        <!-- Responsive grid (e.g. 3x4 on iPad mini portrait, 5x2 on desktop) -->
       </div>
 
       <!-- Action & Navigation Toolbar -->

@@ -183,7 +183,21 @@ body {
 /* Tablet & iPad mini 6 portrait optimization */
 @media (min-width: 600px) {
   .app-container {
-    max-width: 680px;
+    max-width: 720px;
+    padding: 20px 18px;
+  }
+}
+
+@media (min-width: 740px) {
+  .app-container {
+    max-width: 744px;
+    padding: 16px 14px;
+  }
+}
+
+@media (min-width: 960px) {
+  .app-container {
+    max-width: 820px;
     padding: 24px 20px;
   }
 }
@@ -930,17 +944,17 @@ body.dark-mode .tracing-feedback.completed {
 }
 
 /* ==========================================================================
-   WRITING MODE (ONE HANZI AT A TIME, 5x2 MI ZI GE GRID)
+   WRITING MODE (RESPONSIVE MI ZI GE GRID FOR APPLE PENCIL)
    ========================================================================== */
 .writing-mode-section {
   display: flex;
   flex-direction: column;
   align-items: center;
   flex: 1;
-  margin-bottom: 20px;
-  gap: 12px;
   width: 100%;
+  gap: 10px;
   animation: fadeIn 0.3s ease-out;
+  touch-action: none;
 }
 
 .writing-hero-card {
@@ -949,13 +963,13 @@ body.dark-mode .tracing-feedback.completed {
   -webkit-backdrop-filter: blur(20px);
   border: 1.5px solid var(--card-border);
   border-radius: var(--radius-lg);
-  padding: 14px 18px;
+  padding: 10px 16px;
   width: 100%;
   box-shadow: var(--shadow-soft);
   transition: var(--transition-smooth);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .hero-top-row {
@@ -967,15 +981,15 @@ body.dark-mode .tracing-feedback.completed {
 .hero-char-group {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 }
 
 .hero-hanzi-display {
   background: var(--primary-sage-soft);
   border: 1.5px solid var(--card-border);
   border-radius: var(--radius-md);
-  width: 76px;
-  height: 76px;
+  width: 62px;
+  height: 62px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -984,7 +998,7 @@ body.dark-mode .tracing-feedback.completed {
 }
 
 .target-large-char {
-  font-size: 3rem;
+  font-size: 2.5rem;
   font-weight: 600;
   color: var(--text-main);
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -994,7 +1008,7 @@ body.dark-mode .tracing-feedback.completed {
 .hero-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   flex: 1;
 }
 
@@ -1005,7 +1019,7 @@ body.dark-mode .tracing-feedback.completed {
 }
 
 .target-pinyin {
-  font-size: 1.35rem;
+  font-size: 1.25rem;
   font-weight: 700;
   color: var(--text-pinyin);
   font-family: 'Quicksand', sans-serif;
@@ -1013,19 +1027,20 @@ body.dark-mode .tracing-feedback.completed {
 }
 
 .speech-btn.mini {
-  padding: 4px 10px;
-  font-size: 0.8rem;
+  padding: 3px 8px;
+  font-size: 0.78rem;
   border-radius: var(--radius-pill);
 }
 
 .target-meaning {
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   font-weight: 600;
   color: var(--text-main);
+  line-height: 1.2;
 }
 
 .target-subhint {
-  font-size: 0.76rem;
+  font-size: 0.74rem;
   color: var(--text-subtle);
   font-weight: 500;
 }
@@ -1034,8 +1049,8 @@ body.dark-mode .tracing-feedback.completed {
 .writing-progress-panel {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding-top: 6px;
+  gap: 5px;
+  padding-top: 5px;
   border-top: 1px solid var(--canvas-border);
 }
 
@@ -1043,22 +1058,30 @@ body.dark-mode .tracing-feedback.completed {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .progress-pill {
   font-family: 'Fredoka', sans-serif;
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-muted);
   background: var(--primary-sage-soft);
-  padding: 4px 12px;
+  padding: 3px 10px;
   border-radius: var(--radius-pill);
 }
 
-.progress-pill.highlight {
+.progress-pill.dose-pill {
   color: var(--primary-sage);
   font-weight: 700;
-  background: rgba(91, 146, 134, 0.15);
+  background: rgba(91, 146, 134, 0.16);
+}
+
+.progress-pill.highlight {
+  color: var(--accent-lavender);
+  font-weight: 700;
+  background: var(--accent-lavender-soft);
 }
 
 .progress-track {
@@ -1076,27 +1099,66 @@ body.dark-mode .tracing-feedback.completed {
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* 5x2 Writing Grid Viewport (Strictly Non-Scrolling) */
+/* Responsive Writing Grid Viewport (Strictly Non-Scrolling & Apple Pencil Priority) */
 .writing-grid-viewport {
   width: 100%;
+  flex: 1;
   display: flex;
   justify-content: center;
   align-items: center;
   overflow: hidden;
   position: relative;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  min-height: 0;
 }
 
 .mizige-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  grid-template-rows: repeat(2, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(var(--grid-cols, 5), var(--cell-size, 1fr));
+  grid-template-rows: repeat(var(--grid-rows, 2), var(--cell-size, 1fr));
+  gap: var(--grid-gap, 8px);
+  justify-content: center;
+  align-content: center;
   width: 100%;
-  max-width: 660px;
+  max-width: 100%;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Grid layout variants */
+.mizige-grid.grid-5x2 {
+  grid-template-columns: repeat(5, var(--cell-size, 1fr));
+  grid-template-rows: repeat(2, var(--cell-size, 1fr));
+}
+
+.mizige-grid.grid-3x4 {
+  grid-template-columns: repeat(3, var(--cell-size, 1fr));
+  grid-template-rows: repeat(4, var(--cell-size, 1fr));
+}
+
+.mizige-grid.grid-2x5 {
+  grid-template-columns: repeat(2, var(--cell-size, 1fr));
+  grid-template-rows: repeat(5, var(--cell-size, 1fr));
+}
+
+.mizige-grid.grid-5x2 .cell-placeholder,
+.mizige-grid.grid-2x5 .cell-placeholder {
+  display: none !important;
+}
+
+.mizige-grid.grid-3x4 .cell-placeholder {
+  display: block;
 }
 
 .mizige-cell {
   position: relative;
+  width: var(--cell-size, 100%);
+  height: var(--cell-size, 100%);
   aspect-ratio: 1 / 1;
   background-color: var(--mizige-canvas-bg);
   background-image: var(--mizige-bg);
@@ -1107,22 +1169,33 @@ body.dark-mode .tracing-feedback.completed {
   box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.04);
   overflow: hidden;
   touch-action: none;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.2s ease;
 }
 
 .mizige-cell:hover {
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
 }
 
+.mizige-cell.cell-placeholder {
+  opacity: 0.2;
+  border: 1.5px dashed var(--canvas-border);
+  background: transparent;
+  box-shadow: none;
+  pointer-events: none;
+}
+
 .cell-num {
   position: absolute;
   top: 3px;
-  left: 4px;
-  font-size: 0.65rem;
+  left: 5px;
+  font-size: 0.7rem;
   font-family: 'Fredoka', sans-serif;
   font-weight: 600;
   color: var(--text-subtle);
-  opacity: 0.45;
+  opacity: 0.55;
   pointer-events: none;
   z-index: 2;
   user-select: none;
@@ -1134,6 +1207,7 @@ body.dark-mode .tracing-feedback.completed {
   box-sizing: border-box;
   display: block;
   touch-action: none;
+  -webkit-touch-callout: none;
   cursor: crosshair;
   z-index: 1;
 }
@@ -1142,11 +1216,12 @@ body.dark-mode .tracing-feedback.completed {
   display: block;
   width: 100%;
   height: 100%;
+  touch-action: none;
 }
 
 .mizige-cell.is-complete {
   border-color: var(--primary-sage);
-  box-shadow: inset 0 0 0 2px rgba(91, 146, 134, 0.22);
+  box-shadow: inset 0 0 0 2px rgba(91, 146, 134, 0.25);
 }
 
 .mizige-cell.is-mistake {
