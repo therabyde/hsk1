@@ -228,7 +228,7 @@
                 </button>
               </div>
               <p id="writing-target-meaning" class="target-meaning">Kamu / Anda</p>
-              <span class="target-subhint">Ulangi penulisan 10x pada kotak di bawah ✍️</span>
+              <span class="target-subhint">Tulis karakter ini 10 kali dengan urutan goresan yang benar ✍️</span>
             </div>
           </div>
         </div>
@@ -246,23 +246,14 @@
         </div>
       </div>
 
-      <!-- Non-Scrolling Writing Grid Viewport -->
-      <div class="writing-grid-viewport" id="writing-grid-viewport">
-        <!-- Responsive grid (e.g. 3x4 on iPad mini portrait, 5x2 on desktop) -->
-      </div>
-
-      <!-- Action & Navigation Toolbar -->
-      <div class="writing-nav-toolbar">
-        <button id="clear-active-grid-btn" class="canvas-action-btn secondary" title="Hapus coretan pada Hanzi ini">
-          <span>🗑️ Bersihkan</span>
-        </button>
-        <div class="nav-btn-group">
-          <button id="prev-grid-char-btn" class="canvas-action-btn nav-btn" title="Hanzi sebelumnya" disabled>
-            <span>← Previous</span>
-          </button>
-          <button id="next-grid-char-btn" class="canvas-action-btn primary nav-btn" title="Hanzi berikutnya">
-            <span id="next-grid-char-label">Next →</span>
-          </button>
+      <!-- Single Large Focus Writing Board -->
+      <div class="large-writing-field-container" id="large-writing-field-container">
+        <div class="mizige-large-box" id="mizige-large-box">
+          <div class="mizige-large-writer" id="writing-large-writer"></div>
+          <span class="mizige-watermark-num" id="mizige-watermark">1 / 3</span>
+        </div>
+        <div id="writing-repetition-container">
+          <div id="writing-repetition-progress">0 / 10</div>
         </div>
       </div>
 

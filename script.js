@@ -363,6 +363,7 @@ const writingAudioBtn = document.getElementById('writing-audio-btn');
 const writingSetProgress = document.getElementById('writing-set-progress');
 const writingHanziProgress = document.getElementById('writing-hanzi-progress');
 const writingOverallProgress = document.getElementById('writing-overall-progress');
+const writingRepetitionProgress = document.getElementById('writing-repetition-progress');
 const writingProgressFill = document.getElementById('writing-progress-fill');
 const writingGridViewport = document.getElementById('writing-grid-viewport');
 const clearActiveGridBtn = document.getElementById('clear-active-grid-btn');
@@ -614,6 +615,19 @@ function loadWritingForCurrentSet() {
   
   const savedState = dailyWriting.writingStates[dailyWriting.currentSetIndex];
   initWritingSession([currentSetWord], savedState);
+  
+  // FIX B: Synchronize watermark immediately after session initialization
+  const watermark = document.getElementById('mizige-watermark');
+  if (watermark) {
+    watermark.textContent = `${writingSession.currentIndex + 1} / ${writingSession.hanziList.length}`;
+  }
+
+  // FIX SET TRANSITION: Mount board when Writing tab is visible
+  if (writingView && !writingView.hidden) {
+    requestAnimationFrame(() => {
+      mountLargeWritingBoard(writingSession.currentIndex, true);
+    });
+  }
 }
 
 function markCurrentWritingSetComplete() {
@@ -1080,6 +1094,7 @@ function switchTab(tabName) {
 
     requestAnimationFrame(() => {
       mountWritingGrid(writingSession.currentIndex, true);
+      mountLargeWritingBoard(writingSession.currentIndex, true);
     });
   }
 }
@@ -1170,10 +1185,10 @@ function initWritingSession(items, savedState = null) {
     Math.max(list.length - 1, 0)
   );
   writingSession.cellCompletedStatus = { ...(savedState?.cellCompletedStatus || {}) };
+  writingSession.currentRepetition = (savedState?.currentRepetition || 0) < writingSession.cellsPerHanzi ? (savedState?.currentRepetition || 0) : 0;
+  writingSession.repetitionsPerHanzi = writingSession.cellsPerHanzi; // Default to 10 repetitions
   writingSession.completionRecorded = Boolean(savedState?.completionRecorded);
   writingCellWriters = {};
-
-  renderWritingGrids();
   updateWritingUI();
 }
 
@@ -1236,61 +1251,121 @@ function applyWritingGridLayout(layout) {
 }
 
 /**
- * Render responsive grids for all Hanzi in the session into the viewport.
- * Includes 10 active cells + 2 placeholders (displayed in 3x4 layout).
+ * Initialize single large writing board for Focus Writing mode.
  */
-function renderWritingGrids() {
-  if (!writingGridViewport) return;
-  writingGridViewport.innerHTML = '';
-
-  writingSession.hanziList.forEach((hanziObj, hIdx) => {
-    const grid = document.createElement('div');
-    grid.className = `mizige-grid ${hIdx === writingSession.currentIndex ? '' : 'hidden'}`;
-    grid.id = `mizige-grid-${hIdx}`;
-    grid.dataset.hanziIdx = hIdx;
-
-    // 10 active writing cells
-    for (let cIdx = 0; cIdx < writingSession.cellsPerHanzi; cIdx++) {
-      const cell = document.createElement('div');
-      cell.className = 'mizige-cell';
-      if (writingSession.cellCompletedStatus[`${hIdx}_${cIdx}`]) {
-        cell.classList.add('is-complete');
-      }
-
-      const numWatermark = document.createElement('span');
-      numWatermark.className = 'cell-num';
-      numWatermark.textContent = cIdx + 1;
-      cell.appendChild(numWatermark);
-
-      const writerHost = document.createElement('div');
-      writerHost.className = 'cell-writer';
-      writerHost.id = `writing-cell-${hIdx}-${cIdx}`;
-      writerHost.setAttribute('aria-label', `Latihan ${hanziObj.char}, pengulangan ${cIdx + 1}`);
-      cell.appendChild(writerHost);
-      grid.appendChild(cell);
-    }
-
-    // 2 subtle placeholder cells for 3x4 layout (rows 4 cols 2 & 3)
-    for (let pIdx = 0; pIdx < 2; pIdx++) {
-      const placeholder = document.createElement('div');
-      placeholder.className = 'mizige-cell cell-placeholder';
-      placeholder.setAttribute('aria-hidden', 'true');
-      grid.appendChild(placeholder);
-    }
-
-    writingGridViewport.appendChild(grid);
-  });
-
-  initWritingCellWriters();
-}
-
-function initWritingCellWriters() {
+function initLargeWritingBoard() {
   if (typeof HanziWriter === 'undefined') {
     showToast('Latihan goresan belum siap. Periksa koneksi lalu coba lagi.');
     return;
   }
-  observeWritingGridResize();
-  mountWritingGrid(writingSession.currentIndex, true);
+
+  const container = document.getElementById('large-writing-field-container');
+  const writerHost = document.getElementById('writing-large-writer');
+  const watermark = document.getElementById('mizige-watermark');
+  
+  if (!container || !writerHost) return;
+
+  // Set initial watermark for first Hanzi
+  watermark.textContent = `${writingSession.currentIndex + 1} / ${writingSession.hanziList.length}`;
+  
+  // Initialize single large writing board
+  initLargeWritingBoard();
+}
+
+/**
+ * Initialize single large writing board.
+ */
+function initLargeWritingBoard() {
+  const container = document.getElementById('large-writing-field-container');
+  const writerHost = document.getElementById('writing-large-writer');
+  if (!container || !writerHost) return;
+
+  // Show container
+  container.style.display = 'flex';
+
+  // Mount the HanziWriter for current Hanzi
+  mountLargeWritingBoard(writingSession.currentIndex, true);
+}
+
+/**
+ * Mount the single large writing board with HanziWriter.
+ */
+function mountLargeWritingBoard(hIdx) {
+  // [TRACE] Diagnostics for Hanzi transition
+  console.log('[WRITING TRACE] MOUNT', {
+    hIdx,
+    currentIndex: writingSession.currentIndex,
+    currentRepetition: writingSession.currentRepetition,
+    activeChar: writingSession.hanziList[hIdx]?.char
+  });
+  const container = document.getElementById('large-writing-field-container');
+  const writerHost = document.getElementById('writing-large-writer');
+  if (!container || !writerHost) return;
+
+  const hanziObj = writingSession.hanziList[hIdx];
+  hanziObj.index = hIdx;
+  if (!hanziObj) return;
+
+  // Clean up any existing HanziWriter instance
+  for (let cIdx = 0; cIdx < writingSession.cellsPerHanzi; cIdx++) {
+    const key = `large_${cIdx}`;
+    const existing = writingCellWriters[key];
+    if (existing?.writer) {
+      try { existing.writer.cancelQuiz(); } catch (error) { /* already inactive */ }
+    }
+  }
+
+  // Clear the writer host before mounting new instance
+  writerHost.replaceChildren();
+
+  const colors = getWriterColors();
+  
+  // Get board dimensions directly for proper square sizing
+const board = document.getElementById('mizige-large-box');
+if (!board) return; // Safety check
+const boardRect = board.getBoundingClientRect();
+const size = Math.floor(Math.min(boardRect.width, boardRect.height));
+const width = size;
+const height = size;
+
+  // Set explicit dimensions on host element before HanziWriter creates its SVG
+  writerHost.style.width = `${width}px`;
+  writerHost.style.height = `${height}px`;
+
+  try {
+    const writer = HanziWriter.create(writerHost, hanziObj.char, {
+      width, height,
+      padding: 10,
+      showOutline: true,
+      strokeColor: colors.strokeColor,
+      outlineColor: colors.outlineColor,
+      highlightColor: colors.highlightColor,
+      drawingWidth: 24,
+      radicalColor: colors.radicalColor,
+      showHintAfterMisses: 2,
+      onLoadCharDataSuccess: () => {
+        // Every fresh attempt for currentRepetition < 10 is a new quiz
+        if (writingSession.currentRepetition < writingSession.repetitionsPerHanzi) {
+          startLargeWritingQuiz(writer, hIdx);
+        } else {
+          writer.showCharacter({ duration: 0 });
+        }
+      },
+      onLoadCharDataError: () => writerHost?.parentElement?.classList.add('writer-unavailable')
+    });
+    writingCellWriters[`large_0`] = { writer, width, height };
+
+    // [TRACE] Diagnostics for Hanzi transition - after creating the second-Hanzi writer
+    console.log('[WRITING TRACE] WRITER CREATED', {
+      hIdx,
+      currentIndex: writingSession.currentIndex,
+      repetition: writingSession.currentRepetition,
+      char: hanziObj.char
+    });
+
+  } catch (error) {
+    console.warn('[HanziWriter] Large writing board unavailable:', hanziObj.char, error);
+  }
 }
 
 function mountWritingGrid(hIdx, forceRemount = false) {
@@ -1298,6 +1373,7 @@ function mountWritingGrid(hIdx, forceRemount = false) {
   if (!grid || grid.classList.contains('hidden')) return;
 
   const hanziObj = writingSession.hanziList[hIdx];
+  hanziObj.index = hIdx;
   if (!hanziObj) return;
 
   // Measure viewport and apply optimal layout
@@ -1348,6 +1424,63 @@ function mountWritingGrid(hIdx, forceRemount = false) {
     } catch (error) {
       console.warn('[HanziWriter] writing cell unavailable:', hanziObj.char, error);
     }
+  }
+}
+
+/**
+ * Start writing quiz for single large writing board.
+ */
+function startLargeWritingQuiz(writer, hIdx) {
+  // [TRACE] Diagnostics for Hanzi transition
+  console.log('[WRITING TRACE] QUIZ START', {
+    hIdx,
+    repetition: writingSession.currentRepetition,
+    char: writingSession.hanziList[hIdx]?.char
+  });
+  try {
+    writer.quiz({
+      onCorrectStroke: () => {},
+      onMistake: () => {
+        setTimeout(() => {
+          document.getElementById('writing-large-writer')?.classList.remove('is-mistake');
+        }, 3000);
+      },
+      onComplete: () => {
+        // [TRACE] Diagnostics for Hanzi transition
+        console.log('[WRITING TRACE] COMPLETE', {
+          hIdx,
+          currentIndex: writingSession.currentIndex,
+          repetitionBefore: writingSession.currentRepetition,
+          char: writingSession.hanziList[hIdx]?.char
+        });
+        
+        const currentRep = writingSession.currentRepetition || 0;
+        const nextRep = currentRep + 1;
+        
+        // Mark this attempt as complete with Hanzi index scoping
+        const completionKey = `${writingSession.currentIndex}_${nextRep}`;
+        writingSession.cellCompletedStatus[completionKey] = true;
+        writingSession.currentRepetition = nextRep;
+        updateWritingUI();
+        updateWritingProgress();
+        if (nextRep < writingSession.repetitionsPerHanzi) {
+          // [TRACE] Diagnostics for Hanzi transition
+          console.log('[WRITING TRACE] MOUNT', {
+            hIdx,
+            currentIndex: writingSession.currentIndex,
+            currentRepetition: writingSession.currentRepetition,
+            activeChar: writingSession.hanziList[hIdx]?.char
+          });
+          mountLargeWritingBoard(writingSession.currentIndex);
+        } else {
+          // At #10: show completed character
+          try { writer.showCharacter({ duration: 0 }); } catch(e) {}
+          updateWritingProgress();
+        }
+      }
+    });
+  } catch (error) {
+    console.warn('[HanziWriter] Large writing quiz failed:', error);
   }
 }
 
@@ -1433,6 +1566,11 @@ function updateWritingUI() {
   }
 
   updateWritingProgress();
+  
+  // Update repetition counter display (e.g., "2 / 10")
+  if (writingRepetitionProgress) {
+    writingRepetitionProgress.textContent = `${writingSession.currentRepetition} / ${writingSession.repetitionsPerHanzi}`;
+  }
 
   // If in Writing mode, also update zen bar stats
   if (writingView && !writingView.classList.contains('hidden') && sessionCountEl) {
@@ -1470,6 +1608,12 @@ function isWritingSessionComplete() {
  * Switch to a specific Hanzi index within the current word set.
  */
 function goToWritingHanzi(newIndex) {
+  // [TRACE] Diagnostics for Hanzi transition
+  console.log('[WRITING TRACE] HANZI TRANSITION BEFORE', {
+    currentIndex: writingSession.currentIndex,
+    currentRepetition: writingSession.currentRepetition,
+    hanziList: writingSession.hanziList.map(x => x.char)
+  });
   if (newIndex < 0 || newIndex >= writingSession.hanziList.length) return;
 
   const currentGrid = document.getElementById(`mizige-grid-${writingSession.currentIndex}`);
@@ -1477,10 +1621,30 @@ function goToWritingHanzi(newIndex) {
 
   writingSession.currentIndex = newIndex;
 
+  // Reset repetition counter for new Hanzi
+  writingSession.currentRepetition = 0;
+
+  // [TRACE] Diagnostics for Hanzi transition
+  console.log('[WRITING TRACE] HANZI TRANSITION AFTER', {
+    currentIndex: writingSession.currentIndex,
+    currentRepetition: writingSession.currentRepetition,
+    activeChar: writingSession.hanziList[writingSession.currentIndex]?.char
+  });
+
   const targetGrid = document.getElementById(`mizige-grid-${newIndex}`);
   if (targetGrid) targetGrid.classList.remove('hidden');
 
-  requestAnimationFrame(() => mountWritingGrid(newIndex, true));
+  // Update Hanzi index watermark
+  const watermark = document.getElementById('mizige-watermark');
+  if (watermark) {
+    watermark.textContent = `${newIndex + 1} / ${writingSession.hanziList.length}`;
+  }
+
+  requestAnimationFrame(() => {
+  mountWritingGrid(newIndex, true);
+  mountLargeWritingBoard(newIndex);
+});
+  
   updateWritingUI();
 }
 
@@ -1531,10 +1695,17 @@ function nextWritingHanzi() {
     }
   }
 
-  // Set not yet complete: advance to next Hanzi in multi-Hanzi word if possible
-  if (writingSession.currentIndex < writingSession.hanziList.length - 1) {
-    goToWritingHanzi(writingSession.currentIndex + 1);
-    return;
+  // Set not yet complete: advance to next Hanzi ONLY when all repetitions for current Hanzi are done
+  const currentHanziIdx = writingSession.currentIndex;
+  if (currentHanziIdx < writingSession.hanziList.length - 1) {
+    const currentRep = writingSession.currentRepetition || 0;
+    const maxReps = writingSession.repetitionsPerHanzi;
+    
+    // Only advance to next Hanzi after completing all repetitions for this Hanzi
+    if (currentRep >= maxReps) {
+      goToWritingHanzi(writingSession.currentIndex + 1);
+      return;
+    }
   }
 
   // On the last Hanzi of incomplete set: prompt user
@@ -2040,6 +2211,12 @@ function setupEventListeners() {
 
   // Keyboard Shortcuts (Space / ArrowRight = Next, ArrowLeft = Prev)
   document.addEventListener('keydown', (e) => {
+  // ENTER key: no-op during writing session
+  if (e.code === 'Enter') {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
     const isFavOpen = favModal && !favModal.classList.contains('hidden');
     const isHistoryOpen = historyModal && !historyModal.classList.contains('hidden');
     if (isFavOpen || isHistoryOpen) return;
