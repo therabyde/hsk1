@@ -1721,3 +1721,79 @@ body.dark-mode .tracing-feedback.completed {
     linear-gradient(45deg, transparent calc(50% - 1px), rgba(255,255,255,0.1) calc(50% - 1px), transparent calc(50% + 1px)),
     linear-gradient(-45deg, transparent calc(50% - 1px), rgba(255,255,255,0.1) calc(50% - 1px), transparent calc(50% + 1px));
 }
+
+/* ==========================================================================
+   WRITING NAVIGATION CONTROLS (iPad Touch Buttons)
+   ========================================================================== */
+.writing-nav-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 16px 8px 24px 8px;
+}
+
+.writing-nav-controls .nav-btn {
+  flex: 1;
+  max-width: 180px;
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--primary-sage-soft) 0%, var(--primary-sage) 100%);
+  color: var(--text-main);
+  border: none;
+  border-radius: var(--radius-pill);
+  font-family: 'Fredoka', sans-serif;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(91, 146, 134, 0.2);
+  transition: var(--transition-smooth);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.writing-nav-controls .nav-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(91, 146, 134, 0.3);
+}
+
+.writing-nav-controls .nav-btn:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(91, 146, 134, 0.25);
+}
+
+.writing-nav-controls .nav-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.writing-nav-controls .btn-icon {
+  font-size: 1.3rem;
+  line-height: 1;
+  margin-bottom: 2px;
+}
+
+.writing-nav-controls .btn-text {
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+
+/* Dark mode adjustments */
+body.dark-mode .writing-nav-controls .nav-btn {
+  background: linear-gradient(135deg, rgba(102, 196, 178, 0.2) 0%, rgba(102, 196, 178, 0.15) 100%);
+  border: 1px solid var(--primary-sage);
+}
+
+body.dark-mode .writing-nav-controls .nav-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(102, 196, 178, 0.3) 0%, rgba(102, 196, 178, 0.25) 100%);
+}
+
+/* ==========================================================================
+   END OF STYLESHEET
+   ========================================================================== */

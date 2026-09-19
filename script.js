@@ -369,6 +369,7 @@ const writingGridViewport = document.getElementById('writing-grid-viewport');
 const clearActiveGridBtn = document.getElementById('clear-active-grid-btn');
 const prevGridCharBtn = document.getElementById('prev-grid-char-btn');
 const nextGridCharBtn = document.getElementById('next-grid-char-btn');
+const prevWritingBtn = document.getElementById('prev-writing-btn');
 const nextGridCharLabel = document.getElementById('next-grid-char-label');
 
 const pinyinEl = document.getElementById('card-pinyin');
@@ -1549,6 +1550,12 @@ function updateWritingUI() {
     prevGridCharBtn.disabled = (writingSession.currentIndex === 0 && currentSetIdx === 0);
   }
 
+  // Update touch navigation buttons (iPad/iOS controls)
+  const prevTouchDisabled = (writingSession.currentIndex === 0 || (currentSetIdx === 0 && writingSession.hanziList.length === 0));
+  if (prevWritingBtn) {
+    prevWritingBtn.disabled = prevTouchDisabled;
+  }
+
   if (nextGridCharLabel) {
     // Requirements:
     // Jika current set selesai tetapi masih ada set berikutnya: button harus: Next →
@@ -1621,14 +1628,32 @@ function goToWritingHanzi(newIndex) {
 
   writingSession.currentIndex = newIndex;
 
-  // Reset repetition counter for new Hanzi
-  writingSession.currentRepetition = 0;
-
-  // [TRACE] Diagnostics for Hanzi transition
+  // Restore saved repetition state from completion status if available
+  const activeHanziIdx = newIndex;
+  const activeCellCount = writingSession.hanziList.length * writingSession.cellsPerHanzi;
+  let savedRepForThisHanzi = 0;
+  
+  // Count completed repetitions for this specific Hanzi index
+  // Completion keys use pattern: `${currentIndex}_${cellIdx}` where cellIdx is 0-9
+  const hanziStartIndex = activeHanziIdx * writingSession.cellsPerHanzi;
+  let completedForThisHanzi = 0;
+  for (let i = 1; i <= writingSession.cellsPerHanzi; i++) {
+    const key = `${activeHanziIdx}_${i}`;
+    if (writingSession.cellCompletedStatus[key] || writingSession.cellCompletedStatus[String(hanziStartIndex + i)]) {
+      completedForThisHanzi++;
+    }
+  }
+  
+  // Restore currentRepetition to match completion count, but ensure we don't exceed max
+  writingSession.currentRepetition = Math.min(completedForThisHanzi, writingSession.repetitionsPerHanzi);
+  
+  // [TRACE] Diagnostics for Hanzi transition (restored state + transition)
   console.log('[WRITING TRACE] HANZI TRANSITION AFTER', {
+    newIndex: activeHanziIdx,
+    char: writingSession.hanziList[activeHanziIdx]?.char,
     currentIndex: writingSession.currentIndex,
     currentRepetition: writingSession.currentRepetition,
-    activeChar: writingSession.hanziList[writingSession.currentIndex]?.char
+    completedForThisHanzi: completedForThisHanzi
   });
 
   const targetGrid = document.getElementById(`mizige-grid-${newIndex}`);
@@ -2239,6 +2264,22 @@ function setupEventListeners() {
       }
     }
   });
+
+  // Touch Navigation Buttons (iPad/iOS touch controls)
+  const prevWritingBtn = document.getElementById('prev-writing-btn');
+  const nextWritingBtn = document.getElementById('next-writing-btn');
+  
+  if (prevWritingBtn) {
+    prevWritingBtn.addEventListener('click', () => {
+      prevWritingHanzi();
+    });
+  }
+
+  if (nextWritingBtn) {
+    nextWritingBtn.addEventListener('click', () => {
+      nextWritingHanzi();
+    });
+  }
 }
 
 // Helper Utilities
