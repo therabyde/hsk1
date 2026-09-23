@@ -13,8 +13,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="HSK 1 Micro-Dosing">
-  <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+  <link rel="apple-touch-icon" href="assets/icon-192.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png">
 
   <!-- Hanzi Writer CDN Library -->
   <script src="https://cdn.jsdelivr.net/npm/hanzi-writer@3.5/dist/hanzi-writer.min.js"></script>
@@ -75,22 +75,26 @@
         <span class="tab-icon">✍️</span>
         <span class="tab-text">Latihan Menulis</span>
       </button>
+      <button id="tab-recall-btn" class="tab-btn" data-tab="recall" aria-selected="false">
+        <span class="tab-icon">🧠</span>
+        <span class="tab-text">Recall the Memory</span>
+      </button>
     </nav>
 
-    <!-- Clean Stats Bar (Word Count & Day Streak) -->
-    <section class="zen-bar">
-      <div class="zen-pill">
-        <span class="zen-emoji">☕</span>
-        <span id="session-count">Kata ke-1 hari ini</span>
-      </div>
-      <div class="zen-pill streak-pill">
-        <span class="zen-emoji">🔥</span>
-        <span id="streak-display"><strong id="streak-count">1</strong> Hari Streak</span>
+      <div class="zen-bar">
+        <div class="zen-pill">
+          <span class="zen-emoji">☕</span>
+          <span id="session-count">Kata ke-1 hari ini</span>
+        </div>
+        <div class="zen-pill streak-pill">
+          <span class="zen-emoji">🔥</span>
+          <span id="streak-display"><strong id="streak-count">1</strong> Hari Streak</span>
+        </div>
       </div>
     </section>
 
-    <!-- TAB 1: MAIN VOCABULARY VIEW -->
-    <main id="vocab-view" class="flashcard-section tab-content">
+    <!-- VOCABULARY VIEW -->
+    <main id="vocab-view" class="flashcard-section tab-content" role="tabpanel" aria-labelledby="vocab-tab-btn" aria-hidden="false">
       
       <!-- Loading State -->
       <div id="loading-state" class="card-loader">
@@ -181,6 +185,7 @@
           </button>
         </div>
 
+        <!-- Recall Test Progress Indicator -->
       </article>
 
       <!-- HANZI WRITER INTERACTIVE TRACING SECTION -->
@@ -207,6 +212,65 @@
           <span id="tracing-feedback-text">Tebalkan bayangan goresan dengan jari / kursor</span>
         </div>
       </section>
+
+    </main>
+
+    <!-- RECALL VIEW (Phase 3B Top-Level Mode) -->
+    <main id="recall-view" class="recall-view-section tab-content hidden" role="tabpanel" aria-labelledby="recall-tab-btn" aria-hidden="true">
+      
+      <!-- Empty State -->
+      <div id="recall-empty-state" class="recall-empty hidden">
+        <p class="empty-message">Belum ada kata yang dipelajari hari ini.</p>
+        <button id="start-recall-btn" class="pill-btn primary-glow hidden">Mulai Recall</button>
+      </div>
+
+      <!-- Loading State -->
+      <div id="recall-loading-state" class="card-loader hidden">
+        <div class="spinner"></div>
+        <p>Memuat...</p>
+      </div>
+
+      <!-- Completion State -->
+      <div id="recall-completion-state" class="recall-completion hidden">
+        <h2>🧠 Recall Selesai!</h2>
+        <p id="completion-message">Semua kata berhasil diingat.</p>
+        <p id="completion-stats"></p>
+        <button id="restart-recall-btn" class="pill-btn secondary">Ulangi Tes</button>
+      </div>
+
+      <!-- Active Recall Question -->
+      <div id="recall-active-state" class="recall-active hidden">
+        <header class="recall-header">
+          <h2>🧠 Recall the Memory</h2>
+          <span class="recall-progress">Progress: <span id="recall-progress-indicator"></span></span>
+        </header>
+        
+        <div class="recall-content">
+          <!-- Hanzi as prompt -->
+          <div id="recall-hanzi-display" class="recall-hanzi-box">
+            <span id="recall-hanzi" class="recall-char">Loading...</span>
+          </div>
+
+          <!-- Input fields for answer -->
+          <div class="recall-inputs">
+            <div class="input-group">
+              <label for="recall-pinyin-input" class="input-label">Pinyin:</label>
+              <input type="text" id="recall-pinyin-input" placeholder="Contoh: nǐ hǎo" autocomplete="off" autocorrect="off" spellcheck="true">
+            </div>
+
+            <div class="input-group">
+              <label for="recall-meaning-input" class="input-label">Arti:</label>
+              <input type="text" id="recall-meaning-input" placeholder="Contoh: Halo / Apa kabar" autocomplete="off">
+            </div>
+          </div>
+
+          <!-- Submit button -->
+          <button id="recall-submit-btn" class="pill-btn primary-glow">CHECK ANSWER</button>
+
+          <!-- Feedback display -->
+          <div id="recall-feedback-display" class="recall-feedback hidden"></div>
+        </div>
+      </div>
 
     </main>
 
@@ -277,7 +341,7 @@
 
   </div>
 
-  <!-- MODAL / DRAWER FOR FAVORITE WORDS -->
+  <!-- RECALL THE MEMORY INPUT AREA (Phase 3B) -->
   <div id="fav-modal" class="modal-overlay hidden" aria-hidden="true">
     <div class="modal-card">
       <div class="modal-header">

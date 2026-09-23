@@ -19,6 +19,9 @@ nul
 # PowerShell scripts (local development convenience only)
 *.ps1
 
+# Backups folder - all backup files moved here
+/backups/
+
 # Editor/IDE files
 .vscode/**
 .idea/**

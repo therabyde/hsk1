@@ -317,6 +317,482 @@ let currentWord = null; // Currently displayed flashcard in 📚 Kosakata
 let sessionCount = 1;
 let favorites = JSON.parse(localStorage.getItem('hsk_favs') || localStorage.getItem('mandarin_chill_favs') || '[]');
 
+// Recall Test State (Phase 3)
+let recallIndex = 0; // Current position in today's flashcard order during Recall Test
+let recallActive = false; // Whether Recall Test mode is active
+let recallState = {};
+try {
+  const rawRecall = localStorage.getItem('hsk_recall_state');
+  if (rawRecall) {
+    const parsed = JSON.parse(rawRecall);
+    // Validate: all values must be objects with known/lastReviewed/count fields
+    if (typeof parsed === 'object' && parsed !== null) {
+      recallState = parsed;
+    }
+  }
+} catch (e) {
+  console.warn('Invalid recall state, initializing empty:', e.message);
+}
+
+// Learned Vocabulary State (Phase 3A Foundation)
+const LEARNED_WORDS_STORAGE_KEY = 'hsk_learned_words';
+let learnedWords = [];
+try {
+  const rawLearned = localStorage.getItem(LEARNED_WORDS_STORAGE_KEY);
+  if (rawLearned) {
+    const parsed = JSON.parse(rawLearned);
+    // Validate: must be an array
+    if (Array.isArray(parsed)) {
+      // Deduplicate and validate each entry is a non-empty string
+      learnedWords = Array.from(new Set(parsed.filter(item => typeof item === 'string' && item.trim().length > 0)));
+    }
+  }
+} catch (e) {
+  console.warn('Invalid learned words storage, initializing empty:', e.message);
+}
+
+// Helper functions for Learned Vocabulary tracking
+function getLearnedWords() {
+  return learnedWords;
+}
+
+function isWordLearned(wordIdentity) {
+  // wordIdentity should be pinyin (stable identifier)
+  if (!wordIdentity || typeof wordIdentity !== 'string') return false;
+  return learnedWords.includes(wordIdentity);
+}
+
+function markWordAsLearned(wordIdentity) {
+  // Add to learned words if not already present
+  if (!isWordLearned(wordIdentity)) {
+    learnedWords.push(wordIdentity);
+    try {
+      localStorage.setItem(LEARNED_WORDS_STORAGE_KEY, JSON.stringify(learnedWords));
+    } catch (e) {
+      console.warn('Failed to save learned words:', e.message);
+    }
+  }
+}
+
+function getLearnedWordCount() {
+  return learnedWords.length;
+}
+
+// ─── Phase 3A.5: Daily Learned Vocabulary (Date-based Tracking) ─────────
+
+/**
+ * Daily Learned Words Storage (Phase 3A.5 Foundation)
+ * Tracks vocabulary exposed on each calendar date separately.
+ * Structure: { "YYYY-MM-DD": ["pinyin1", "pinyin2", ...] }
+ */
+const DAILY_LEARNED_WORDS_STORAGE_KEY = 'hsk_daily_learned_words';
+let dailyLearnedWords = {};
+
+try {
+  const rawDailyLearned = localStorage.getItem(DAILY_LEARNED_WORDS_STORAGE_KEY);
+  if (rawDailyLearned) {
+    const parsed = JSON.parse(rawDailyLearned);
+    // Validate: must be an object with string keys and array values
+    if (typeof parsed === 'object' && parsed !== null) {
+      // Validate each date key has a valid array value
+      const validated = {};
+      for (const dateKey of Object.keys(parsed)) {
+        const value = parsed[dateKey];
+        if (Array.isArray(value)) {
+          // Deduplicate and validate each entry is a non-empty string
+          validated[dateKey] = Array.from(new Set(
+            value.filter(item => typeof item === 'string' && item.trim().length > 0)
+          ));
+        } else {
+          console.warn('Invalid daily learned words value for date:', dateKey);
+        }
+      }
+      dailyLearnedWords = validated;
+    }
+  }
+} catch (e) {
+  console.warn('Invalid daily learned words storage, initializing empty:', e.message);
+}
+
+// Helper functions for Daily Learned Vocabulary tracking
+function getDailyLearnedWords() {
+  // Return array for today's date only, or empty array if no data exists
+  const today = getTodayKey();
+  return dailyLearnedWords[today] || [];
+}
+
+function getDailyLearnedWordCount() {
+  return (getDailyLearnedWords() || []).length;
+}
+
+function markWordAsLearnedToday(pinyin) {
+  // Add word to today's learned vocabulary if not already present
+  if (!pinyin || typeof pinyin !== 'string' || pinyin.trim().length === 0) return;
+  
+  const today = getTodayKey();
+  
+  if (!dailyLearnedWords[today]) {
+    dailyLearnedWords[today] = [];
+  }
+  
+  if (!dailyLearnedWords[today].includes(pinyin)) {
+    dailyLearnedWords[today].push(pinyin);
+    try {
+      localStorage.setItem(DAILY_LEARNED_WORDS_STORAGE_KEY, JSON.stringify(dailyLearnedWords));
+    } catch (e) {
+      console.warn('Failed to save daily learned words:', e.message);
+    }
+  }
+}
+
+// ─── Phase 3B: Recall The Memory (Actual Retrieval Practice) ──────────────
+
+/**
+ * Daily Recall State Storage (Phase 3B)
+ * Tracks the recall queue, completion state for today only.
+ */
+const RECALL_DAILY_STATE_STORAGE_KEY = 'hsk_recall_daily_state';
+let recallDailyState = null;
+
+try {
+  const rawRecallState = localStorage.getItem(RECALL_DAILY_STATE_STORAGE_KEY);
+  if (rawRecallState) {
+    const parsed = JSON.parse(rawRecallState);
+    // Validate: must be object with date, queue, completed, attempts
+    if (typeof parsed === 'object' && parsed !== null &&
+        typeof parsed.date === 'string' &&
+        Array.isArray(parsed.queue) &&
+        Array.isArray(parsed.completed) &&
+        typeof parsed.attempts === 'object') {
+      recallDailyState = parsed;
+    }
+  }
+} catch (e) {
+  console.warn('Invalid recall daily state, initializing empty:', e.message);
+}
+
+/**
+ * Get today's recall targets (max 10 unique words from learned vocabulary).
+ */
+function getRecallTargets() {
+  if (!vocabularyList || vocabularyList.length === 0) return [];
+  
+  // Get daily learned words
+  const dailyLearned = getDailyLearnedWords();
+  if (dailyLearned.length === 0) return [];
+  
+  // Remove duplicates and limit to 10
+  const uniqueLearned = Array.from(new Set(dailyLearned));
+  return uniqueLearned.slice(0, 10);
+}
+
+/**
+ * Resolve pinyin to vocabulary object.
+ */
+function resolveVocabularyByPinyin(pinyin) {
+  if (!pinyin || !vocabularyList || vocabularyList.length === 0) return null;
+  
+  for (const word of vocabularyList) {
+    if (word.pinyin === pinyin) {
+      return word;
+    }
+  }
+  return null;
+}
+
+/**
+ * Normalize pinyin for comparison.
+ */
+function normalizePinyin(input) {
+  if (!input) return '';
+  return input.toLowerCase().trim().replace(/[\s_\/\-]+/g, ' ').normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+/**
+ * Initialize Recall Test with daily targets.
+ */
+function initRecallTest() {
+  recallActive = true;
+  recallIndex = 0;
+  
+  // Get today's targets
+  const targets = getRecallTargets();
+  if (targets.length === 0) {
+    alert('Belum ada kata yang dipelajari hari ini. Kunjungi 📚 Kosakata terlebih dahulu.');
+    recallActive = false;
+    return;
+  }
+  
+  // Initialize or load daily state
+  const today = getTodayKey();
+  
+  if (recallDailyState && recallDailyState.date === today) {
+    // Continue existing session
+    queue = recallDailyState.queue;
+    completed = recallDailyState.completed;
+    attempts = recallDailyState.attempts;
+    correctCount = recallDailyState.correctCount || 0;
+    incorrectCount = recallDailyState.incorrectCount || 0;
+  } else {
+    // New session - initialize from targets
+    queue = [...targets];
+    completed = [];
+    attempts = {};
+    for (const pinyin of targets) {
+      attempts[pinyin] = 0;
+    }
+    correctCount = 0;
+    incorrectCount = 0;
+    
+    // Save initial state
+    try {
+      recallDailyState = {
+        date: today,
+        queue: queue,
+        completed: completed,
+        attempts: attempts
+      };
+      localStorage.setItem(RECALL_DAILY_STATE_STORAGE_KEY, JSON.stringify(recallDailyState));
+    } catch (e) {
+      console.warn('Failed to save recall state:', e.message);
+    }
+  }
+  
+  // Move to first word in queue
+  moveRecallNext();
+}
+
+/**
+ * Show current recall card with answer hidden.
+ */
+function showRecallCard() {
+  if (!recallActive || !vocabularyList || vocabularyList.length === 0) return;
+  
+  // Get current word from queue
+  const pinyin = queue[recallIndex];
+  if (!pinyin) {
+    // Queue empty - all words completed
+    completeRecallTest();
+    return;
+  }
+  
+  const word = resolveVocabularyByPinyin(pinyin);
+  if (!word) return;
+  
+  // Hide meaning and hints for recall practice
+  if (meaningEl) {
+    meaningEl.textContent = '';
+    meaningEl.classList.add('obscured');
+  }
+  if (hintEl) {
+    hintEl.textContent = '';
+    hintEl.classList.add('obscured');
+  }
+  
+  // Show only hanzi as the prompt
+  if (hanziEl) {
+    hanziEl.textContent = word.hanzi;
+    hanziEl.classList.remove('obscured');
+  }
+  
+  // Update progress display
+  updateRecallProgress();
+}
+
+/**
+ * Move to next word in queue.
+ */
+function moveRecallNext() {
+  recallIndex = (recallIndex + 1) % queue.length;
+  showRecallCard();
+}
+
+/**
+ * Complete recall test and show summary.
+ */
+function completeRecallTest() {
+  if (!recallActive || queue.length === 0) return;
+  
+  recallActive = false;
+  
+  let correctCount = completed.length;
+  let incorrectCount = queue.length - correctCount;
+  let totalAttempts = 0;
+  for (const pinyin of Object.values(attempts)) {
+    totalAttempts += parseInt(pinyin) || 0;
+  }
+  
+  // Mark all as completed in state
+  completed = [...queue];
+  queue = [];
+  
+  try {
+    recallDailyState = {
+      date: getTodayKey(),
+      queue: [],
+      completed: completed,
+      attempts: attempts,
+      correctCount: correctCount,
+      incorrectCount: incorrectCount
+    };
+    localStorage.setItem(RECALL_DAILY_STATE_STORAGE_KEY, JSON.stringify(recallDailyState));
+  } catch (e) {
+    console.warn('Failed to save recall completion:', e.message);
+  }
+  
+  // Show summary (if needed - simplify for now)
+  if (recallIndex >= queue.length) {
+    alert(`🧠 Recall Selesai!\n\n${correctCount} / ${queue.length + correctCount - correctCount === 0 ? 1 : ''} kata berhasil diingat.`);
+  }
+}
+
+/**
+ * Exit Recall Test and return to normal browsing.
+ */
+function exitRecallTest() {
+  recallActive = false;
+  recallIndex = 0;
+  
+  // Reset UI but keep daily state for tomorrow
+  const recallCardEl = document.getElementById('recall-card');
+  if (recallCardEl) recallCardEl.classList.remove('hidden');
+  
+  // Update vocabUI to exit recall mode
+  updateVocabUI();
+}
+
+/**
+ * Update recall progress display.
+ */
+function updateRecallProgress() {
+  const total = queue.length + completed.length;
+  if (total > 0) {
+    sessionCountEl.textContent = `🧠 Recall · ${recallIndex + 1} / ${total}`;
+  }
+}
+
+/**
+ * Handle answer submission.
+ * Uses Phase 3B state system: recallDailyState with queue, completed, attempts, currentRecallIndex
+ */
+function submitRecallAnswer(pinyin, meaning) {
+  console.log('[RECALL TRACE] SUBMIT ENTERED');
+  console.log('[RECALL TRACE] INPUTS', {pinyin, meaning});
+  
+  // Get current target from Phase 3B state
+  const currentPinyin = recallDailyState?.queue?.[currentRecallIndex];
+  
+  if (!currentPinyin) {
+    console.log('[RECALL TRACE] NO CURRENT TARGET - COMPLETION STATE');
+    completeRecallTest();
+    return;
+  }
+  
+  // Resolve vocabulary object from vocabularyList using current pinyin
+  const currentWord = vocabularyList.find(w => w.pinyin === currentPinyin);
+  
+  if (!currentWord) {
+    console.log('[RECALL TRACE] TARGET NOT FOUND IN VOCABULARY', {pinyin: currentPinyin});
+    showToast('⚠️ Kata tidak ditemukan.');
+    updateRecallUI();
+    return;
+  }
+  
+  // Normalize inputs for comparison
+  const normalizedInputPinyin = normalizePinyin(pinyin);
+  const normalizedCorrectPinyin = normalizePinyin(currentWord.pinyin);
+  
+  const normalizedInputMeaning = (meaning || '').toLowerCase().trim();
+  const normalizedCorrectMeaning = (currentWord.meaning || '').toLowerCase().trim();
+  
+  // Check if answer is correct
+  const isCorrect = normalizedInputPinyin === normalizedCorrectPinyin &&
+                    normalizedInputMeaning === normalizedCorrectMeaning;
+  
+  console.log('[RECALL TRACE] VALIDATION', {
+    currentPinyin,
+    normalizedInputPinyin,
+    normalizedCorrectPinyin,
+    normalizedInputMeaning,
+    normalizedCorrectMeaning
+  });
+  
+  // Track attempts in Phase 3B state
+  recallDailyState.attempts[currentPinyin] = (recallDailyState.attempts[currentPinyin] || 0) + 1;
+  
+  if (isCorrect) {
+    console.log('[RECALL TRACE] CORRECT ANSWER');
+    showToast('✓ Benar!');
+    
+    // Remove from queue, add to completed
+    const idx = recallDailyState.queue.indexOf(currentPinyin);
+    if (idx > -1) {
+      recallDailyState.queue.splice(idx, 1);
+      recallDailyState.completed.push(currentPinyin);
+    }
+    
+    console.log('[RECALL TRACE] QUEUE AFTER CORRECT', {queue: recallDailyState.queue.length, completed: recallDailyState.completed.length});
+    
+    // Advance index safely
+    if (recallDailyState.queue.length === 0) {
+      completeRecallTest();
+    } else {
+      currentRecallIndex = Math.min(currentRecallIndex + 1, recallDailyState.queue.length - 1);
+      console.log('[RECALL TRACE] ADVANCED INDEX', {currentRecallIndex});
+      updateRecallUI();
+    }
+    
+    // Persist state
+    try {
+      localStorage.setItem(RECALL_DAILY_STATE_STORAGE_KEY, JSON.stringify(recallDailyState));
+    } catch (e) {
+      console.log('[RECALL TRACE] PERSISTENCE ERROR', e.message);
+    }
+  } else {
+    console.log('[RECALL TRACE] WRONG ANSWER');
+    showToast('✗ Belum tepat, coba lagi nanti.');
+    
+    // Wrong answer: move word to back of queue
+    const pinyinToRequeue = currentPinyin;
+    recallDailyState.queue.splice(currentRecallIndex, 1);
+    recallDailyState.queue.push(pinyinToRequeue);
+    currentRecallIndex = recallDailyState.queue.length - 1;
+    
+    console.log('[RECALL TRACE] QUEUE AFTER WRONG', {queue: recallDailyState.queue.length, index: currentRecallIndex});
+    
+    // Persist state
+    try {
+      localStorage.setItem(RECALL_DAILY_STATE_STORAGE_KEY, JSON.stringify(recallDailyState));
+    } catch (e) {
+      console.log('[RECALL TRACE] PERSISTENCE ERROR', e.message);
+    }
+    
+    updateRecallUI();
+  }
+}
+
+/**
+ * Recall DOM references removed to avoid duplication.
+ * Phase 3B canonical declarations exist at top-level (lines ~880-883).
+ */
+
+// Obscure / Blur all answers on current card
+function obscureAll() {
+  if (meaningEl) meaningEl.classList.add('obscured');
+  if (hintEl) hintEl.classList.add('obscured');
+  if (hanziEl) hanziEl.classList.add('obscured');
+}
+
+// Pure Individual Toggle Functions
+function toggleMeaningObscured() {
+  if (meaningEl) meaningEl.classList.toggle('obscured');
+  if (hintEl) hintEl.classList.toggle('obscured');
+}
+
+function toggleHanziObscured() {
+  if (hanziEl) hanziEl.classList.toggle('obscured');
+}
+
 // Daily Writing Practice State (Strictly 5 vocabulary sets per day)
 const DAILY_WRITING_SETS = 5;
 const DAILY_WRITING_STORAGE_KEY = 'hsk_daily_writing_v2';
@@ -353,8 +829,10 @@ const cardEl = document.getElementById('flashcard');
 
 const tabVocabBtn = document.getElementById('tab-vocab-btn');
 const tabWritingBtn = document.getElementById('tab-writing-btn');
+const tabRecallBtn = document.getElementById('tab-recall-btn');
 const vocabView = document.getElementById('vocab-view');
 const writingView = document.getElementById('writing-view');
+const recallView = document.getElementById('recall-view');
 
 const writingTargetChar = document.getElementById('writing-target-char');
 const writingTargetPinyin = document.getElementById('writing-target-pinyin');
@@ -409,8 +887,32 @@ const speechFeedbackBox = document.getElementById('speech-feedback-box');
 const speechFeedbackIcon = document.getElementById('speech-feedback-icon');
 const speechFeedbackText = document.getElementById('speech-feedback-text');
 
+// Recall Test DOM elements (Phase 3)
+const recallTestTriggerBtn = document.getElementById('recall-test-trigger-btn');
+const recallTahuBtn = document.getElementById('recall-tahu-btn');
+const recallBelumHafalBtn = document.getElementById('recall-belum-hafal-btn');
+const recallFeedbackEl = document.getElementById('recall-feedback-display');
+
 const toggleMeaningBtn = document.getElementById('toggle-meaning-btn');
 const toggleHanziBtn = document.getElementById('toggle-hanzi-btn');
+
+// Recall View State Elements (Phase 3B - Missing declarations from audit)
+const recallEmptyState = document.getElementById('recall-empty-state');
+let currentRecallIndex = 0;
+// Recall Question State (Multiple Choice)
+let recallQuestionStage = 'pinyin'; // 'pinyin' or 'translation'
+const recallLoadingState = document.getElementById('recall-loading-state');
+const recallActiveState = document.getElementById('recall-active-state');
+const recallCompletionState = document.getElementById('recall-completion-state');
+const recallProgressIndicator = document.getElementById('recall-progress-indicator');
+const recallHanziDisplay = document.getElementById('recall-hanzi-display');
+const recallHanzi = document.getElementById('recall-hanzi');
+
+// Recall Input/Action Elements (Phase 3B - Missing declarations from audit)
+const recallPinyinInput = document.getElementById('recall-pinyin-input');
+const recallMeaningInput = document.getElementById('recall-meaning-input');
+const recallSubmitBtn = document.getElementById('recall-submit-btn');
+const recallFeedbackDisplay = document.getElementById('recall-feedback-display');
 
 // Obscure / Blur all answers on current card
 function obscureAll() {
@@ -650,12 +1152,327 @@ function markCurrentWritingSetComplete() {
   }
 }
 
+// ─── Daily Flashcard Randomization ───────────────────────────────────────
+
+/**
+ * Generate daily randomized vocabulary index order for flashcards.
+ * Returns an array of indices into vocabularyList, shuffled deterministically by date.
+ * Does NOT mutate the canonical vocabularyList.
+ */
+function getDailyFlashcardOrder() {
+  if (!vocabularyList || vocabularyList.length === 0) return [];
+  const today = getTodayKey();
+  
+  // Check localStorage for stored daily order
+  const storageKey = 'hsk_daily_flashcard_order';
+  const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+  
+  if (saved && saved.date === today && Array.isArray(saved.order) && saved.order.length === vocabularyList.length) {
+    // Validate: check for duplicates and valid indices
+    const seen = new Set();
+    let isValid = true;
+    for (const idx of saved.order) {
+      if (idx < 0 || idx >= vocabularyList.length || seen.has(idx)) {
+        isValid = false;
+        break;
+      }
+      seen.add(idx);
+    }
+    if (isValid) {
+      return saved.order;
+    }
+  }
+  
+  // Generate new deterministic order using date-seeded PRNG
+  let seed = 0;
+  for (let i = 0; i < today.length; i++) {
+    seed = ((seed << 5) - seed + today.charCodeAt(i)) | 0;
+  }
+  
+  // Mulberry32 PRNG
+  function mulberry32() {
+    seed |= 0;
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  
+  // Create index array [0, 1, 2, ..., vocabularyList.length - 1]
+  const indices = Array.from({length: vocabularyList.length}, (_, i) => i);
+  
+  // Shuffle indices deterministically
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(mulberry32() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+  
+  // Save to localStorage
+  try {
+    localStorage.setItem(storageKey, JSON.stringify({ date: today, order: indices }));
+  } catch (e) {
+    console.warn('Failed to save daily flashcard order:', e.message);
+  }
+  
+  return indices;
+}
+
+// ─── Recall Test (Phase 3) ───────────────────────────────────────────────
+
+/**
+ * Initialize recall test mode.
+ * Resets position to start of today's randomized order.
+ */
+function initRecallTest() {
+  recallActive = true;
+  recallIndex = 0;
+  
+  // Ensure daily order is loaded for Recall Test
+  const dailyOrder = getDailyFlashcardOrder();
+  if (dailyOrder.length === 0) return; // Cannot start without daily order
+  
+  showRecallCard();
+}
+
+/**
+ * Show current recall card.
+ * Resets meaning to hidden state for fresh recall attempt.
+ */
+function showRecallCard() {
+  if (!recallActive || !vocabularyList || vocabularyList.length === 0) return;
+  
+  const dailyOrder = getDailyFlashcardOrder();
+  let wordIdx = vocabIndex;
+  if (dailyOrder.length > recallIndex) {
+    wordIdx = dailyOrder[recallIndex];
+  }
+  currentWord = vocabularyList[wordIdx];
+  
+  // Update DOM with smooth transitions
+  if (cardEl) {
+    cardEl.classList.remove('slide-next');
+    void cardEl.offsetWidth; // Trigger reflow
+    cardEl.classList.add('slide-next');
+  }
+  
+  if (pinyinEl) pinyinEl.textContent = currentWord.pinyin;
+  if (meaningEl) {
+    meaningEl.textContent = currentWord.meaning;
+    // Always hide meaning for recall test - user must recall first
+    meaningEl.classList.add('obscured');
+  }
+  if (hintEl) hintEl.textContent = currentWord.hint || "Satu kata per waktu ☕";
+  if (hanziEl) hanziEl.textContent = currentWord.hanzi;
+  
+  // Reset answers to blurred by default for recall test
+  obscureAll();
+  
+  // Hide Speech Feedback Box
+  hideSpeechFeedback();
+  
+  // Update Hanzi Writer board with new character
+  updateHanziWriter(currentWord.hanzi);
+  
+  // Check Favorite State (independent of recall)
+  updateFavHeartState();
+  
+  // Reset Recall Test UI: hide assessment buttons (reveal is done via meaning click)
+  if (recallTahuBtn) recallTahuBtn.classList.add('hidden');
+  if (recallBelumHafalBtn) recallBelumHafalBtn.classList.add('hidden');
+  // Keep reveal button hidden - use meaning area click instead
+}
+
+/**
+ * Update recall test progress indicator in zen-bar.
+ */
+function updateRecallProgress() {
+  if (sessionCountEl) {
+    const dailyOrder = getDailyFlashcardOrder();
+    sessionCountEl.textContent = `🧠 Tes Ingatan · ${recallIndex + 1} / ${dailyOrder.length}`;
+  }
+}
+
+/**
+ * Reset Recall Test UI to initial state.
+ */
+function resetRecallTestUI() {
+  // Hide assessment buttons (Tahu/Belum Hafal)
+  if (recallTahuBtn) recallTahuBtn.classList.add('hidden');
+  if (recallBelumHafalBtn) recallBelumHafalBtn.classList.add('hidden');
+  // Reveal is handled via meaning area click instead of button
+}
+
+/**
+ * Reveal the meaning after user thinks.
+ */
+function revealRecallAnswer() {
+  if (!currentWord || !meaningEl) return;
+  
+  // Remove obscured class to show answer (tap on blurred area triggered this)
+  meaningEl.classList.remove('obscured');
+  
+  // Show assessment buttons
+  if (recallTahuBtn && !recallTahuBtn.classList.contains('hidden')) {
+    recallTahuBtn.classList.remove('hidden');
+  }
+  if (recallBelumHafalBtn && !recallBelumHafalBtn.classList.contains('hidden')) {
+    recallBelumHafalBtn.classList.remove('hidden');
+  }
+}
+
+/**
+ * Save recall state: user marked as known.
+ */
+function markRecallKnown() {
+  if (!currentWord) return;
+  
+  const pinyin = currentWord.pinyin;
+  
+  // Ensure word entry exists in recallState
+  if (!recallState[pinyin]) {
+    recallState[pinyin] = {
+      known: false,
+      lastReviewed: null,
+      correctCount: 0,
+      incorrectCount: 0
+    };
+  }
+  
+  recallState[pinyin].known = true;
+  recallState[pinyin].lastReviewed = getTodayKey();
+  recallState[pinyin].correctCount += 1;
+  recallState[pinyin].incorrectCount = recallState[pinyin].incorrectCount || 0;
+  
+  // Save to localStorage
+  try {
+    localStorage.setItem('hsk_recall_state', JSON.stringify(recallState));
+  } catch (e) {
+    console.warn('Failed to save recall state:', e.message);
+  }
+  
+  showToast('✓ Sudah hafal!');
+  moveRecallNext();
+}
+
+/**
+ * Save recall state: user marked as not yet remembered.
+ */
+function markRecallNotKnown() {
+  if (!currentWord) return;
+  
+  const pinyin = currentWord.pinyin;
+  
+  // Ensure word entry exists in recallState
+  if (!recallState[pinyin]) {
+    recallState[pinyin] = {
+      known: false,
+      lastReviewed: null,
+      correctCount: 0,
+      incorrectCount: 0
+    };
+  }
+  
+  recallState[pinyin].known = false;
+  recallState[pinyin].lastReviewed = getTodayKey();
+  recallState[pinyin].correctCount = recallState[pinyin].correctCount || 0;
+  recallState[pinyin].incorrectCount += 1;
+  
+  // Save to localStorage
+  try {
+    localStorage.setItem('hsk_recall_state', JSON.stringify(recallState));
+  } catch (e) {
+    console.warn('Failed to save recall state:', e.message);
+  }
+  
+  showToast('✗ Belum hafal, ayo belajar lagi!');
+  moveRecallNext();
+}
+
+/**
+ * Move to next card in Recall Test.
+ */
+function moveRecallNext() {
+  recallIndex = (recallIndex + 1);
+  
+  // Check if we've completed all cards
+  const dailyOrder = getDailyFlashcardOrder();
+  const totalCards = dailyOrder.length;
+  
+  if (recallIndex >= totalCards) {
+    completeRecallTest();
+  } else {
+    showRecallCard();
+  }
+}
+
+/**
+ * Complete Recall Test and show summary.
+ */
+function completeRecallTest() {
+  recallActive = false;
+  
+  // Build summary
+  let summaryHtml = '';
+  let tahuCount = 0;
+  let belumHafalCount = 0;
+  
+  for (const pinyin of Object.keys(recallState)) {
+    const entry = recallState[pinyin];
+    if (entry.known) tahuCount++;
+    else belumHafalCount++;
+  }
+  
+  summaryHtml = `
+    <div class="recall-summary">
+      <h3>🧠 Tes Ingatan Selesai</h3>
+      <p>Sudah menyelesaikan ${getDailyFlashcardOrder().length} kata hari ini.</p>
+      <div class="summary-stats">
+        <div class="stat-item">✓ Tahu: <strong>${tahuCount}</strong></div>
+        <div class="stat-item">✗ Belum Hafal: <strong>${belumHafalCount}</strong></div>
+      </div>
+      <button id="recall-restart-btn" class="pill-btn primary-glow">Ulangi Tes</button>
+    </div>
+  `;
+  
+  // Update recall feedback display
+  if (recallFeedbackEl) {
+    recallFeedbackEl.innerHTML = summaryHtml;
+  }
+}
+
+/**
+ * Restart Recall Test.
+ */
+function restartRecallTest() {
+  recallIndex = 0;
+  showRecallCard();
+}
+
+/**
+ * Exit Recall Test and return to normal browsing.
+ */
+function exitRecallTest() {
+  recallActive = false;
+  vocabIndex = 0; // Reset position
+  sessionCount = 1; // Reset counter
+  updateVocabUI();
+  displayCurrentVocabWord();
+}
+
 // ─── Menu 📚 Kosakata: Unrestricted Vocabulary Library Browsing ──────────────
 
 function displayCurrentVocabWord() {
   if (!vocabularyList || vocabularyList.length === 0) return;
 
-  currentWord = vocabularyList[vocabIndex];
+  // Cache today's randomized order for use in updateVocabUI()
+  const dailyOrder = getDailyFlashcardOrder();
+  
+  // Use the randomized index, falling back to vocabIndex if order is invalid
+  let wordIdx = vocabIndex;
+  if (dailyOrder.length > vocabIndex) {
+    wordIdx = dailyOrder[vocabIndex];
+  }
+  currentWord = vocabularyList[wordIdx];
 
   // Update DOM with smooth transitions
   if (cardEl) {
@@ -663,6 +1480,12 @@ function displayCurrentVocabWord() {
     void cardEl.offsetWidth; // Trigger reflow
     cardEl.classList.add('slide-next');
   }
+
+  // Phase 3A: Mark word as learned on first meaningful exposure (global historical)
+  markWordAsLearned(currentWord.pinyin);
+  
+  // Phase 3A.5: Also mark for today's daily vocabulary tracking
+  markWordAsLearnedToday(currentWord.pinyin);
 
   if (pinyinEl) pinyinEl.textContent = currentWord.pinyin;
   if (meaningEl) meaningEl.textContent = currentWord.meaning;
@@ -681,19 +1504,39 @@ function displayCurrentVocabWord() {
   // Check Favorite State
   updateFavHeartState();
   updateVocabUI();
+
+  // Toggle recall input container visibility based on recallActive state
+  const recallInputContainer = document.getElementById('recall-input-container');
+  if (recallInputContainer) {
+    if (recallActive) {
+      recallInputContainer.classList.remove('hidden');
+    } else {
+      recallInputContainer.classList.add('hidden');
+    }
+  }
 }
 
 function updateVocabUI() {
   if (!vocabularyList || vocabularyList.length === 0) return;
 
-  // Zen bar word counter for Vocabulary Library
-  if (sessionCountEl) {
-    sessionCountEl.textContent = `Kosakata · Kata ke-${vocabIndex + 1} / ${vocabularyList.length}`;
+  // During Recall Test, show recall progress instead of normal position
+  let displayMode = 'Kosakata';
+  let currentIndex = vocabIndex;
+  
+  if (recallActive && getDailyFlashcardOrder().length > recallIndex) {
+    displayMode = '🧠 Tes Ingatan';
+    currentIndex = recallIndex;
   }
 
-  // Previous button: disabled only on very first word
+  // Zen bar word counter - shows position in today's randomized order
+  if (sessionCountEl) {
+    sessionCountEl.textContent = `${displayMode} · ${currentIndex + 1} / ${getDailyFlashcardOrder().length}`;
+  }
+
+  // Previous button: disabled only on very first position
   if (prevWordBtn) {
-    prevWordBtn.disabled = (vocabIndex === 0);
+    const wordIdx = recallActive && getDailyFlashcardOrder().length > vocabIndex ? vocabIndex : vocabIndex;
+    prevWordBtn.disabled = (getDailyFlashcardOrder().length === 0 || wordIdx === 0);
   }
 
   // Next button: always standard vocabulary browsing forward
@@ -701,7 +1544,18 @@ function updateVocabUI() {
     const mainLabel = nextBtn.querySelector('.btn-main-text');
     const subLabel = nextBtn.querySelector('.btn-subtext');
     if (mainLabel) mainLabel.textContent = 'Kata Berikutnya →';
-    if (subLabel) subLabel.textContent = `Kosakata ${vocabIndex + 1} / ${vocabularyList.length}`;
+    if (subLabel) subLabel.textContent = `${displayMode} ${currentIndex + 1} / ${getDailyFlashcardOrder().length}`;
+  }
+
+  // Recall Test Progress Indicator visibility
+  const recallProgressIndicator = document.getElementById('recall-progress-indicator');
+  if (recallProgressIndicator) {
+    if (recallActive && getDailyFlashcardOrder().length > currentIndex) {
+      recallProgressIndicator.classList.remove('hidden');
+      recallProgressIndicator.querySelector('#recall-progress-text').textContent = `${displayMode} · ${currentIndex + 1} / ${getDailyFlashcardOrder().length}`;
+    } else {
+      recallProgressIndicator.classList.add('hidden');
+    }
   }
 }
 
@@ -1047,10 +1901,487 @@ function setTracingFeedback(state) {
 // ─── Mode Menulis Hanzi (One Hanzi at a Time, 5×2 Mi Zi Ge Grid) ─────────────
 
 /**
- * Tab switcher between Vocabulary mode and 5x2 Writing Practice mode.
+ * Load Recall daily state and initialize top-level Recall UI.
+ * Called when switching to Recall tab on first visit today.
  */
+function loadRecallDailyTargets() {
+  console.log('[RECALL TRACE] STATE', {recallDailyState, currentRecallIndex});
+  // Get today's targets (max 10 unique from daily learned vocabulary)
+  const targets = getRecallTargets();
+  
+  // Create initial queue and state
+  const queue = [...targets];
+  const completed = [];
+  const attempts = {};
+  
+  // Load existing state or create new for today
+  try {
+    const rawState = localStorage.getItem(RECALL_DAILY_STATE_STORAGE_KEY);
+    if (rawState) {
+      const parsed = JSON.parse(rawState);
+      if (typeof parsed === 'object' && parsed !== null &&
+          typeof parsed.date === 'string' &&
+          Array.isArray(parsed.queue) &&
+          Array.isArray(parsed.completed)) {
+        recallDailyState = parsed;
+        // Validate queue still exists and is array
+        if (!Array.isArray(recallDailyState.queue)) {
+          recallDailyState.queue = [];
+        }
+      } else {
+        throw new Error('Invalid state format');
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load recall state:', e.message);
+    recallDailyState = null;
+  }
+  
+  // If no existing state, create new one for today
+  if (!recallDailyState) {
+    recallDailyState = {
+      date: getTodayKey(),
+      queue: [...queue],
+      completed: [],
+      attempts: {}
+    };
+    try {
+      localStorage.setItem(RECALL_DAILY_STATE_STORAGE_KEY, JSON.stringify(recallDailyState));
+    } catch (e) {
+      console.warn('Failed to save recall state:', e.message);
+    }
+  }
+  
+  // If state exists but date is different (new day), reset
+  const todayKey = getTodayKey();
+  if (recallDailyState.date !== todayKey) {
+    recallDailyState.date = todayKey;
+    recallDailyState.queue = [...queue];
+    recallDailyState.completed = [];
+    recallDailyState.attempts = {};
+    try {
+      localStorage.setItem(RECALL_DAILY_STATE_STORAGE_KEY, JSON.stringify(recallDailyState));
+    } catch (e) {
+      console.warn('Failed to save new recall state:', e.message);
+    }
+  }
+  
+  // Initialize UI elements for Recall view - use top-level declarations only
+  
+  // Hide loading state using top-level declaration
+  if (recallLoadingState) {
+    recallLoadingState.classList.add('hidden');
+  }
+  
+  // Show empty state if no targets today
+  if (targets.length === 0) {
+    if (recallEmptyState) {
+      recallEmptyState.classList.remove('hidden');
+    }
+    return;
+  }
+  
+  // Hide empty state, show progress if queue exists
+  if (recallEmptyState) {
+    recallEmptyState.classList.add('hidden');
+  }
+  
+  // Update progress counter using top-level declaration
+  if (recallProgressIndicator) {
+    recallProgressIndicator.textContent = `🧠 Recall · ${Math.min(recallDailyState.queue.length, 10) + 1} / ${targets.length}`;
+  }
+  
+  // Manage aria-hidden for active Recall view
+  if (recallView && recallActiveState) {
+    recallView.setAttribute('aria-hidden', 'false');
+    recallActiveState.classList.remove('hidden');
+  }
+
+  // Render the current Recall question
+  updateRecallUI();
+}
+
 /**
- * Tab switcher between Vocabulary mode and Daily Writing Practice mode.
+ * Update Recall UI to display current target question with multiple choice.
+ * Two-stage recall:
+ * Stage 1 (pinyin): User chooses correct pinyin from 4 options
+ * Stage 2 (translation): User chooses correct meaning from 4 options
+ */
+function updateRecallUI() {
+  console.log('[RECALL TRACE] UPDATE UI START');
+
+  // Check if we have valid state and queue
+  if (!recallDailyState || !recallDailyState.queue) {
+    console.log('[RECALL TRACE] NO STATE/QUEUE - SKIPPED');
+    return;
+  }
+
+  const currentIndex = currentRecallIndex !== undefined ? currentRecallIndex : 0;
+
+  // Safety check: ensure index is within bounds
+  if (!Array.isArray(recallDailyState.queue) || recallDailyState.queue.length === 0) {
+    console.log('[RECALL TRACE] EMPTY QUEUE');
+    // Show completion state instead of empty state after successful Recall completion
+    if (recallCompletionState && !recallCompletionState.classList.contains('hidden')) {
+      // Already showing completion - do nothing
+    } else {
+      showCompletionState();
+    }
+    return;
+  }
+
+  // Safety check: ensure index is within bounds
+  if (currentIndex >= recallDailyState.queue.length) {
+    console.log('[RECALL TRACE] INDEX OUT OF RANGE', { currentIndex, length: recallDailyState.queue.length });
+    showEmptyRecallState();
+    return;
+  }
+
+  const currentTargetPinyin = recallDailyState.queue[currentIndex];
+  console.log('[RECALL TRACE] CURRENT TARGET', { pinyin: currentTargetPinyin, index: currentIndex });
+
+  // Resolve pinyin against vocabularyList to get full word object
+  let currentWord = null;
+  try {
+    currentWord = vocabularyList.find(word => word && word.pinyin === currentTargetPinyin);
+  } catch (e) {
+    console.error('[RECALL TRACE] ERROR RESOLVING WORD:', e.message);
+  }
+
+  if (!currentWord) {
+    console.log('[RECALL TRACE] TARGET NOT FOUND', { pinyin: currentTargetPinyin });
+    showEmptyRecallState();
+    return;
+  }
+
+  console.log('[RECALL TRACE] RESOLVED WORD:', { hanzi: currentWord.hanzi, pinyin: currentWord.pinyin, meaning: currentWord.meaning });
+
+  // Hide all other states
+  if (recallEmptyState) recallEmptyState.classList.add('hidden');
+  if (recallLoadingState) recallLoadingState.classList.add('hidden');
+  if (recallCompletionState) recallCompletionState.classList.add('hidden');
+
+  // Show active state
+  if (recallActiveState) {
+    recallActiveState.classList.remove('hidden');
+  }
+
+  // Display Hanzi prompt
+  if (recallHanziDisplay) recallHanziDisplay.textContent = currentWord.hanzi;
+  if (recallHanzi) recallHanzi.textContent = currentWord.hanzi;
+
+  // Hide input fields - using multiple choice instead
+  if (recallPinyinInput) {
+    recallPinyinInput.classList.add('hidden');
+  }
+  if (recallMeaningInput) {
+    recallMeaningInput.classList.add('hidden');
+  }
+  
+  // Hide submit button
+  if (recallSubmitBtn) {
+    recallSubmitBtn.classList.add('hidden');
+  }
+
+  // Update progress indicator
+  if (recallProgressIndicator && recallDailyState.queue.length > 0) {
+    const nextPos = currentIndex + 1;
+    recallProgressIndicator.textContent = `🧠 Recall · ${nextPos} / ${recallDailyState.queue.length}`;
+  }
+
+  // Render the appropriate question based on current stage
+  console.log('[RECALL TRACE] QUESTION STAGE', { stage: recallQuestionStage });
+  if (recallQuestionStage === 'pinyin') {
+    renderPinyinQuestion(currentWord);
+  } else if (recallQuestionStage === 'translation') {
+    renderTranslationQuestion(currentWord);
+  }
+
+  console.log('[RECALL TRACE] UPDATE UI COMPLETE');
+}
+
+/**
+ * Render Pinyin question: show Hanzi and 4 pinyin choices.
+ */
+function renderPinyinQuestion(currentWord) {
+  if (recallFeedbackDisplay && recallFeedbackDisplay.textContent) {
+    // Hide feedback from previous attempt
+    recallFeedbackDisplay.textContent = '';
+    recallFeedbackDisplay.classList.add('hidden');
+  }
+  
+  // Generate choices: 1 correct + 3 distractors
+  const choices = generatePinyinChoices(currentWord, vocabularyList);
+  
+  if (!choices || choices.length === 0) {
+    console.log('[RECALL TRACE] NO PYNIN CHOICES AVAILABLE');
+    return;
+  }
+  
+  // Build question HTML with choices
+  let choicesHtml = '';
+  choices.forEach((choice, idx) => {
+    const btn = document.createElement('button');
+    btn.className = 'recall-choice-btn';
+    btn.textContent = choice;
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      handleRecallChoice(choice);
+    };
+    
+    // Style for touch-friendly
+    if (!btn.dataset.styleSet) {
+      btn.style.flex = '1';
+      btn.style.padding = '12px 8px';
+      btn.style.textAlign = 'center';
+      btn.style.fontFamily = 'inherit';
+      btn.style.fontSize = '16px';
+      btn.dataset.styleSet = 'true';
+    }
+    
+    if (!choicesHtml) {
+      choicesHtml = '';
+    }
+    choicesHtml += `<button class="recall-choice-btn" style="flex:1;padding:12px 8px;text-align:center;font-family:inherit;font-size:16px;" data-choice="${escapeHtml(choice)}" onclick="handleRecallChoice(this.dataset.choice)">${escapeHtml(choice)}</button>`;
+  });
+  
+  // Render question
+  const progressEl = recallProgressIndicator;
+  if (progressEl) {
+    progressEl.textContent = `🧠 Recall · Pinyin`; // Stage indicator
+  }
+  
+  // Hide old .recall-inputs container using local reference
+  const _ri = document.querySelector('.recall-inputs');
+  if (_ri) {
+    _ri.classList.add('hidden');
+  }
+  
+  // Create choices container if it doesn't exist
+  let choicesContainer = document.getElementById('recall-choices');
+  if (!choicesContainer) {
+    choicesContainer = document.createElement('div');
+    choicesContainer.id = 'recall-choices';
+    choicesContainer.className = 'recall-choices';
+    choicesContainer.style.display = 'flex';
+    choicesContainer.style.flexWrap = 'wrap';
+    choicesContainer.style.gap = '8px';
+    choicesContainer.style.marginTop = '12px';
+  }
+  
+  // Append container to Recall active state (avoid duplicate attachment)
+  const activeState = document.getElementById('recall-active-state');
+  if (activeState && choicesContainer && !choicesContainer.parentElement) {
+    activeState.appendChild(choicesContainer);
+  }
+  
+  // Render new choices
+  choicesContainer.innerHTML = choices.map(c => `
+    <button class="recall-choice-btn" style="flex:1;padding:12px 8px;text-align:center;font-family:inherit;font-size:16px;min-height:44px" onclick="handleRecallChoice('${escapeHtml(c)}')">
+      ${escapeHtml(c)}
+    </button>
+  `).join('');
+  
+  console.log('[RECALL TRACE] RENDERED PYNIN QUESTION', { choices, currentWord });
+}
+
+/**
+ * Render Translation question: show Hanzi + pinyin and 4 meaning choices.
+ */
+function renderTranslationQuestion(currentWord) {
+  if (recallFeedbackDisplay && recallFeedbackDisplay.textContent) {
+    // Hide feedback from previous attempt
+    recallFeedbackDisplay.textContent = '';
+    recallFeedbackDisplay.classList.add('hidden');
+  }
+  
+  // Generate choices: 1 correct + 3 distractors
+  const choices = generateMeaningChoices(currentWord, vocabularyList);
+  
+  if (!choices || choices.length === 0) {
+    console.log('[RECALL TRACE] NO MEANING CHOICES AVAILABLE');
+    return;
+  }
+  
+  // Build question HTML with choices
+  let choicesHtml = '';
+  choices.forEach((choice, idx) => {
+    const btn = document.createElement('button');
+    btn.className = 'recall-choice-btn';
+    btn.textContent = choice;
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      handleRecallChoice(choice);
+    };
+    
+    if (!btn.dataset.styleSet) {
+      btn.style.flex = '1';
+      btn.style.padding = '12px 8px';
+      btn.style.textAlign = 'center';
+      btn.style.fontFamily = 'inherit';
+      btn.style.fontSize = '16px';
+      btn.dataset.styleSet = 'true';
+    }
+    
+    if (!choicesHtml) {
+      choicesHtml = '';
+    }
+    choicesHtml += `<button class="recall-choice-btn" style="flex:1;padding:12px 8px;text-align:center;font-family:inherit;font-size:16px;" data-choice="${escapeHtml(choice)}" onclick="handleRecallChoice(this.dataset.choice)">${escapeHtml(choice)}</button>`;
+  });
+  
+  // Render question
+  const progressEl = recallProgressIndicator;
+  if (progressEl) {
+    progressEl.textContent = `🧠 Recall · Artinya`; // Stage indicator
+  }
+  
+  // Hide old .recall-inputs container using local reference
+  const _ri = document.querySelector('.recall-inputs');
+  if (_ri) {
+    _ri.classList.add('hidden');
+  }
+  
+  // Create choices container if it doesn't exist
+  let choicesContainer = document.getElementById('recall-choices');
+  if (!choicesContainer) {
+    choicesContainer = document.createElement('div');
+    choicesContainer.id = 'recall-choices';
+    choicesContainer.className = 'recall-choices';
+    choicesContainer.style.display = 'flex';
+    choicesContainer.style.flexWrap = 'wrap';
+    choicesContainer.style.gap = '8px';
+    choicesContainer.style.marginTop = '12px';
+  }
+  
+  // Append container to Recall active state (avoid duplicate attachment)
+  const activeState = document.getElementById('recall-active-state');
+  if (activeState && choicesContainer && !choicesContainer.parentElement) {
+    activeState.appendChild(choicesContainer);
+  }
+  
+  // Render new choices
+  choicesContainer.innerHTML = choices.map(c => `
+    <button class="recall-choice-btn" style="flex:1;padding:12px 8px;text-align:center;font-family:inherit;font-size:16px;min-height:44px" onclick="handleRecallChoice('${escapeHtml(c)}')">
+      ${escapeHtml(c)}
+    </button>
+  `).join('');
+  
+  console.log('[RECALL TRACE] RENDERED MEANING QUESTION', { choices, currentWord });
+}
+
+/**
+ * Show empty Recall state.
+ */
+function showEmptyRecallState() {
+  if (recallEmptyState) recallEmptyState.classList.remove('hidden');
+  if (recallActiveState) recallActiveState.classList.add('hidden');
+  if (recallLoadingState) recallLoadingState.classList.add('hidden');
+  if (recallCompletionState) recallCompletionState.classList.add('hidden');
+}
+
+/**
+ * Initialize new Recall session using existing Phase 3B state targets.
+ * Reuses today's daily recall targets and creates fresh queue/completed/attempts.
+ */
+function initRecallRetry() {
+  // Get today's targets (max 10 unique from learned vocabulary)
+  const targets = getRecallTargets();
+  
+  if (targets.length === 0) {
+    console.warn('[RECALL TRACE] NO TARGETS FOR RETRY');
+    return;
+  }
+  
+  // Create fresh Phase 3B state from existing targets
+  const queue = [...targets];
+  const completed = [];
+  const attempts = {};
+  
+  // Create new state with today's date (already in storage)
+  recallDailyState = {
+    date: getTodayKey(),
+    queue,
+    completed,
+    attempts
+  };
+  
+  // Persist new session to localStorage
+  try {
+    localStorage.setItem(RECALL_DAILY_STATE_STORAGE_KEY, JSON.stringify(recallDailyState));
+  } catch (e) {
+    console.warn('[RECALL TRACE] PERSISTENCE ERROR ON RETRY:', e.message);
+  }
+  
+  // Initialize UI elements for Recall view
+  if (recallLoadingState) recallLoadingState.classList.add('hidden');
+  if (recallEmptyState) recallEmptyState.classList.add('hidden');
+  
+  if (recallView && recallActiveState) {
+    recallView.setAttribute('aria-hidden', 'false');
+    recallActiveState.classList.remove('hidden');
+  }
+  
+  // Update progress indicator
+  if (recallProgressIndicator) {
+    recallProgressIndicator.textContent = `🧠 Recall · 1 / ${targets.length}`;
+  }
+  
+  // Render first question - always starts at Pinyin stage
+  updateRecallUI();
+}
+
+/**
+ * Show completion state for Recall the Memory.
+ */
+function showCompletionState() {
+  const completedCount = recallDailyState?.completed?.length || 0;
+  const totalCount = recallDailyState?.queue?.length + completedCount || 0;
+  
+  // Create completion HTML with proper visual hierarchy
+  let html = '<div class="completion-header">🎉 Recall Selesai!</div>';
+  html += '<div class="completion-message">Kamu berhasil menyelesaikan</div>';
+  html += `<div class="completion-title">Recall the Memory hari ini.</div>`;
+  html += `<div class="completion-stat">${completedCount} / ${totalCount}</div>`;
+  html += '<div class="completion-subtitle">kata berhasil di-recall</div>';
+  html += '<div class="completion-note">Semua target hari ini sudah selesai.</div>';
+  
+  // Build buttons with improved visual hierarchy and styling
+  html += `<button id="recall-retry-btn" class="completion-pill-btn primary">
+    🔄 Ulangi Recall
+  </button>`;
+  html += `<button id="recall-back-btn" class="completion-pill-btn secondary">
+    ← Kembali ke Kosakata
+  </button>`;
+  
+  if (recallCompletionState) {
+    recallCompletionState.innerHTML = html;
+    recallCompletionState.classList.remove('hidden');
+  }
+  
+  // Hide other states
+  if (recallEmptyState) recallEmptyState.classList.add('hidden');
+  if (recallActiveState) recallActiveState.classList.add('hidden');
+  if (recallLoadingState) recallLoadingState.classList.add('hidden');
+  
+  // Wire up retry button using new Phase 3B restart function
+  const retryBtn = document.getElementById('recall-retry-btn');
+  if (retryBtn) {
+    retryBtn.addEventListener('click', () => {
+      initRecallRetry();
+    });
+  }
+  
+  // Wire up back button to switch to vocab tab
+  const backBtn = document.getElementById('recall-back-btn');
+  if (backBtn) {
+    backBtn.addEventListener('click', () => {
+      switchTab('vocab');
+    });
+  }
+}
+
+/**
+ * Tab switcher between Vocabulary, Writing Practice, and Recall the Memory modes.
  */
 function switchTab(tabName) {
   const appContainer = document.querySelector('.app-container');
@@ -1064,11 +2395,19 @@ function switchTab(tabName) {
       tabWritingBtn.classList.remove('active');
       tabWritingBtn.setAttribute('aria-selected', 'false');
     }
+    if (tabRecallBtn) {
+      tabRecallBtn.classList.remove('active');
+      tabRecallBtn.setAttribute('aria-selected', 'false');
+    }
     if (vocabView) vocabView.classList.remove('hidden');
     if (writingView) writingView.classList.add('hidden');
-    if (appContainer) appContainer.classList.remove('writing-tab-active');
+    if (recallView) {
+      recallView.classList.add('hidden');
+      // Reset aria-hidden to true when Recall view is hidden
+      recallView.setAttribute('aria-hidden', 'true');
+    }
+    if (appContainer) appContainer.classList.remove('writing-tab-active', 'recall-tab-active');
 
-    // Restore Vocabulary Library counter in zen-bar
     updateVocabUI();
   } else if (tabName === 'writing') {
     if (tabWritingBtn) {
@@ -1079,11 +2418,19 @@ function switchTab(tabName) {
       tabVocabBtn.classList.remove('active');
       tabVocabBtn.setAttribute('aria-selected', 'false');
     }
+    if (tabRecallBtn) {
+      tabRecallBtn.classList.remove('active');
+      tabRecallBtn.setAttribute('aria-selected', 'false');
+    }
     if (writingView) writingView.classList.remove('hidden');
     if (vocabView) vocabView.classList.add('hidden');
+    if (recallView) {
+      recallView.classList.add('hidden');
+      // Reset aria-hidden to true when Recall view is hidden
+      recallView.setAttribute('aria-hidden', 'true');
+    }
     if (appContainer) appContainer.classList.add('writing-tab-active');
 
-    // Ensure Daily Writing session is loaded
     if (!dailyWriting) {
       initializeDailyWriting();
     }
@@ -1097,8 +2444,34 @@ function switchTab(tabName) {
       mountWritingGrid(writingSession.currentIndex, true);
       mountLargeWritingBoard(writingSession.currentIndex, true);
     });
+  } else if (tabName === 'recall') {
+    // Recall the Memory mode
+    if (tabRecallBtn) {
+      tabRecallBtn.classList.add('active');
+      tabRecallBtn.setAttribute('aria-selected', 'true');
+    }
+    if (tabVocabBtn) {
+      tabVocabBtn.classList.remove('active');
+      tabVocabBtn.setAttribute('aria-selected', 'false');
+    }
+    if (tabWritingBtn) {
+      tabWritingBtn.classList.remove('active');
+      tabWritingBtn.setAttribute('aria-selected', 'false');
+    }
+    if (vocabView) vocabView.classList.add('hidden');
+    if (writingView) writingView.classList.add('hidden');
+    if (recallView) {
+      recallView.classList.remove('hidden');
+      // Set aria-hidden to false when Recall view is active
+      recallView.setAttribute('aria-hidden', 'false');
+    }
+
+    // Load and initialize Recall daily targets
+    loadRecallDailyTargets();
+    updateRecallUI();
   }
 }
+
 
 /**
  * Helper to pick random unique Hanzi from HSK 1 vocabulary.
@@ -2205,6 +3578,10 @@ function setupEventListeners() {
     tabWritingBtn.addEventListener('click', () => switchTab('writing'));
   }
 
+  if (tabRecallBtn) {
+    tabRecallBtn.addEventListener('click', () => switchTab('recall'));
+  }
+
   // Writing Practice 5x2 Actions
   if (clearActiveGridBtn) {
     clearActiveGridBtn.addEventListener('click', clearActiveHanziGrid);
@@ -2234,6 +3611,37 @@ function setupEventListeners() {
     });
   }
 
+  // Recall Test Triggers (Phase 3B - New Retrieval Practice System)
+  if (recallTestTriggerBtn) {
+    recallTestTriggerBtn.addEventListener('click', initRecallTest);
+  }
+
+  // Submit answer button for new input-based recall
+  const recallSubmitBtn = document.getElementById('recall-submit-btn');
+  if (recallSubmitBtn && recallPinyinInput && recallMeaningInput) {
+    recallSubmitBtn.addEventListener('click', () => {
+      console.log('[RECALL TRACE] CHECK BUTTON CLICKED');
+      console.log('[RECALL TRACE] CALLING submitRecallAnswer');
+      submitRecallAnswer(recallPinyinInput.value, recallMeaningInput.value);
+    });
+  }
+
+  // Enter key on inputs to submit answer
+  if (recallPinyinInput && recallMeaningInput) {
+    recallPinyinInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitRecallAnswer(recallPinyinInput.value, recallMeaningInput.value);
+      }
+    });
+    recallMeaningInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitRecallAnswer(recallPinyinInput.value, recallMeaningInput.value);
+      }
+    });
+  }
+
   // Keyboard Shortcuts (Space / ArrowRight = Next, ArrowLeft = Prev)
   document.addEventListener('keydown', (e) => {
   // ENTER key: no-op during writing session
@@ -2247,7 +3655,13 @@ function setupEventListeners() {
     if (isFavOpen || isHistoryOpen) return;
 
     const isWritingActive = writingView && !writingView.classList.contains('hidden');
-
+    
+    // Diagnostic: Log when Space key is pressed while in Recall inputs
+    if ((e.code === 'Space' || e.code === 'ArrowRight') && (recallPinyinInput && recallPinyinInput === document.activeElement) && (recallMeaningInput && recallMeaningInput === document.activeElement)) {
+      console.log('[KEYBOARD TRACE] SPACE ALLOWED IN RECALL INPUT', {activeElement: document.activeElement?.id, code: e.code});
+      return; // Let the input handle the space character
+    }
+    
     if (e.code === 'Space' || e.code === 'ArrowRight') {
       e.preventDefault();
       if (isWritingActive) {
@@ -2315,6 +3729,309 @@ function showToast(msg) {
       toast.parentNode.removeChild(toast);
     }
   }, 2600);
+}
+
+/**
+ * Generate multiple choice options for Pinyin question.
+ * Returns array of 4 unique choices with exactly 1 correct answer.
+ */
+function generatePinyinChoices(currentWord, allWords) {
+  if (!allWords || allWords.length === 0) return [];
+  
+  const { hanzi, pinyin, meaning } = currentWord;
+  const choices = [pinyin]; // Start with correct answer
+  
+  const otherPinyins = allWords.filter(w => w.pinyin !== pinyin).map(w => w.pinyin);
+  
+  for (let i = 0; i < 3 && i < otherPinyins.length; i++) {
+    const j = Math.floor(Math.random() * otherPinyins.length);
+    const distractor = otherPinyins[j];
+    if (!choices.includes(distractor)) {
+      choices.push(distractor);
+      otherPinyins.splice(j, 1);
+    }
+  }
+  
+  return shuffleArray(choices);
+}
+
+/**
+ * Generate multiple choice options for Translation (Meaning) question.
+ * Returns array of 4 unique choices with exactly 1 correct answer.
+ */
+function generateMeaningChoices(currentWord, allWords) {
+  if (!allWords || allWords.length === 0) return [];
+  
+  const { hanzi, pinyin, meaning } = currentWord;
+  const choices = [meaning]; // Start with correct answer
+  
+  const otherMeanings = allWords.filter(w => w.meaning !== meaning).map(w => w.meaning);
+  
+  for (let i = 0; i < 3 && i < otherMeanings.length; i++) {
+    const j = Math.floor(Math.random() * otherMeanings.length);
+    const distractor = otherMeanings[j];
+    if (!choices.includes(distractor)) {
+      choices.push(distractor);
+      otherMeanings.splice(j, 1);
+    }
+  }
+  
+  return shuffleArray(choices);
+}
+
+/**
+ * Handle multiple choice recall answer submission.
+ * Two-stage flow: Pinyin question → Translation question
+ */
+function handleRecallChoice(choiceValue) {
+  if (!recallDailyState || !recallDailyState.queue) {
+    console.warn('[RECALL TRACE] NO STATE FOR CHOICE');
+    return;
+  }
+  
+  const currentIndex = currentRecallIndex;
+  if (currentIndex >= recallDailyState.queue.length) {
+    console.log('[RECALL TRACE] QUEUE EMPTY - SHOWING COMPLETION');
+    if (recallCompletionState) recallCompletionState.classList.remove('hidden');
+    if (recallActiveState) recallActiveState.classList.add('hidden');
+    return;
+  }
+  
+  const currentPinyin = recallDailyState.queue[currentIndex];
+  let currentWord = vocabularyList.find(w => w.pinyin === currentPinyin);
+  
+  if (!currentWord) {
+    console.warn('[RECALL TRACE] WORD NOT FOUND:', currentPinyin);
+    // Skip this word and move to next
+    recallDailyState.queue.splice(currentIndex, 1);
+    if (currentIndex < recallDailyState.queue.length) {
+      currentRecallIndex = currentIndex;
+    } else {
+      currentRecallIndex = Math.max(0, recallDailyState.queue.length - 1);
+    }
+    console.log('[RECALL TRACE] SKIPPED WORD, NEXT INDEX:', currentRecallIndex);
+    updateRecallUI();
+    return;
+  }
+  
+  // Track attempts in Phase 3B state
+  if (!recallDailyState.attempts[currentPinyin]) {
+    recallDailyState.attempts[currentPinyin] = 0;
+  }
+  recallDailyState.attempts[currentPinyin]++;
+  
+  console.log('[RECALL TRACE] CHOICE SUBMITTED', {
+    choice: choiceValue,
+    currentPinyin,
+    stage: recallQuestionStage,
+    attempts: recallDailyState.attempts[currentPinyin]
+  });
+  
+  let isCorrect = false;
+  let nextStage = null;
+  
+  if (recallQuestionStage === 'pinyin') {
+    // Pinyin comparison
+    const normalizedInputPinyin = normalizePinyin(choiceValue);
+    const normalizedCorrectPinyin = normalizePinyin(currentWord.pinyin);
+    isCorrect = normalizedInputPinyin === normalizedCorrectPinyin;
+    
+    console.log('[RECALL TRACE] PINYIN VALIDATION', {
+      input: normalizedInputPinyin,
+      correct: normalizedCorrectPinyin,
+      match: isCorrect
+    });
+    
+    nextStage = isCorrect ? 'translation' : null;
+  } else if (recallQuestionStage === 'translation') {
+    // Translation meaning comparison (exact, case-insensitive, trimmed)
+    const normalizedInputMeaning = (choiceValue || '').toLowerCase().trim();
+    const normalizedCorrectMeaning = (currentWord.meaning || '').toLowerCase().trim();
+    isCorrect = normalizedInputMeaning === normalizedCorrectMeaning;
+    
+    console.log('[RECALL TRACE] MEANING VALIDATION', {
+      input: normalizedInputMeaning,
+      correct: normalizedCorrectMeaning,
+      match: isCorrect
+    });
+    
+    nextStage = isCorrect ? 'completed' : null;
+  }
+  
+  if (isCorrect) {
+    // CORRECT ANSWER - Pinyin correct, show feedback and advance to Translation
+    console.log('[RECALL TRACE] CORRECT ANSWER');
+    showRecallFeedback(true, '✓ Benar!');
+    
+    if (recallQuestionStage === 'pinyin') {
+      // Move to Translation stage with 700ms feedback delay
+      setTimeout(() => {
+        recallQuestionStage = 'translation';
+        updateRecallUI();
+      }, 700);
+    } else if (recallQuestionStage === 'translation') {
+      // Translation correct - both stages complete, remove word from queue permanently
+      console.log('[RECALL TRACE] TRANSLATION CORRECT');
+      showRecallFeedback(true, '✓ Benar!');
+      
+      const completedQueue = [...recallDailyState.queue];
+      const completionIndex = completedQueue.indexOf(currentPinyin);
+      if (completionIndex > -1) {
+        completedQueue.splice(completionIndex, 1);
+      }
+      
+      recallDailyState.queue = completedQueue;
+      recallDailyState.completed.push(currentPinyin);
+      
+      // Persist to localStorage
+      try {
+        localStorage.setItem(
+          RECALL_DAILY_STATE_STORAGE_KEY,
+          JSON.stringify(recallDailyState)
+        );
+        console.log('[RECALL TRACE] PERSISTED AFTER CORRECT');
+      } catch (e) {
+        console.warn('[RECALL TRACE] PERSISTENCE ERROR:', e.message);
+      }
+      
+      // Update progress
+      if (recallProgressIndicator && recallDailyState.queue.length > 0) {
+        const nextPos = currentRecallIndex + 1;
+        recallProgressIndicator.textContent = `🧠 Recall · ${nextPos} / ${recallDailyState.queue.length}`;
+      }
+      
+      // Show completion if queue is empty
+      if (recallDailyState.queue.length === 0) {
+        if (recallCompletionState) recallCompletionState.classList.remove('hidden');
+        if (recallActiveState) recallActiveState.classList.add('hidden');
+      }
+      
+      // Reset stage to Pinyin for new target (surgical fix)
+      recallQuestionStage = 'pinyin';
+      
+      console.log('[RECALL TRACE] NEW TARGET - RESET STAGE', {
+        pinyin: currentPinyin,
+        stage: recallQuestionStage
+      });
+      
+      // Update UI for next word or completion with 700ms feedback delay
+      setTimeout(() => {
+        updateRecallUI();
+      }, 700);
+    }
+  } else {
+    // WRONG ANSWER - could be Pinyin or Translation wrong
+    if (recallQuestionStage === 'pinyin') {
+      console.log('[RECALL TRACE] PINYIN WRONG - REQUEUING');
+      showRecallFeedback(false, '✗ Belum tepat');
+      
+      const completedQueue = [...recallDailyState.queue];
+      const currentIndexInQueue = completedQueue.indexOf(currentPinyin);
+      if (currentIndexInQueue > -1) {
+        // Remove from current position
+        completedQueue.splice(currentIndexInQueue, 1);
+        // Add to end of queue
+        completedQueue.push(currentPinyin);
+        
+        recallDailyState.queue = completedQueue;
+        
+        // Adjust index if needed
+        if (currentRecallIndex >= recallDailyState.queue.length) {
+          currentRecallIndex = Math.max(0, recallDailyState.queue.length - 1);
+        }
+        
+        // Persist to localStorage
+        try {
+          localStorage.setItem(
+            RECALL_DAILY_STATE_STORAGE_KEY,
+            JSON.stringify(recallDailyState)
+          );
+          console.log('[RECALL TRACE] PERSISTED AFTER WRONG');
+        } catch (e) {
+          console.warn('[RECALL TRACE] PERSISTENCE ERROR:', e.message);
+        }
+        
+        // Wrap requeue in 700ms delay with button state management
+        setTimeout(() => {
+          updateRecallUI();
+          // Re-enable buttons after rendering next question
+          const btns = document.querySelectorAll('.recall-choice-btn');
+          btns.forEach(btn => btn.removeAttribute('disabled'));
+        }, 700);
+      }
+    } else if (recallQuestionStage === 'translation') {
+      console.log('[RECALL TRACE] TRANSLATION WRONG - REQUEUING');
+      showRecallFeedback(false, '✗ Belum tepat');
+      
+      const completedQueue = [...recallDailyState.queue];
+      const currentIndexInQueue = completedQueue.indexOf(currentPinyin);
+      if (currentIndexInQueue > -1) {
+        // Remove from current position
+        completedQueue.splice(currentIndexInQueue, 1);
+        // Add to end of queue
+        completedQueue.push(currentPinyin);
+        
+        recallDailyState.queue = completedQueue;
+        
+        // Adjust index if needed
+        if (currentRecallIndex >= recallDailyState.queue.length) {
+          currentRecallIndex = Math.max(0, recallDailyState.queue.length - 1);
+        }
+        
+        // Persist to localStorage
+        try {
+          localStorage.setItem(
+            RECALL_DAILY_STATE_STORAGE_KEY,
+            JSON.stringify(recallDailyState)
+          );
+          console.log('[RECALL TRACE] PERSISTED AFTER WRONG');
+        } catch (e) {
+          console.warn('[RECALL TRACE] PERSISTENCE ERROR:', e.message);
+        }
+        
+        // Wrap requeue in 700ms delay with button state management
+        setTimeout(() => {
+          updateRecallUI();
+          // Re-enable buttons after rendering next question
+          const btns = document.querySelectorAll('.recall-choice-btn');
+          btns.forEach(btn => btn.removeAttribute('disabled'));
+        }, 700);
+      }
+    }
+  }
+}
+/**
+ * Show feedback for Recall answer.
+ * @param {boolean} isCorrect - Whether the answer was correct
+ * @param {string} message - Feedback text to display (optional)
+ */
+function showRecallFeedback(isCorrect, message = null) {
+  const feedbackEl = document.getElementById('recall-feedback-display');
+  if (!feedbackEl) return;
+  
+  // Remove previous states first
+  feedbackEl.classList.remove('hidden', 'correct', 'wrong');
+  
+  // Set text and styling
+  if (isCorrect) {
+    feedbackEl.textContent = '✓ Benar!';
+    feedbackEl.classList.add('correct');
+  } else {
+    feedbackEl.textContent = message || '✗ Belum tepat';
+    feedbackEl.classList.add('incorrect');
+  }
+  
+  // Make visible
+  feedbackEl.classList.remove('hidden');
+  
+  // Disable buttons during feedback delay (only for wrong answers)
+  if (!isCorrect) {
+    const btns = document.querySelectorAll('.recall-choice-btn');
+    btns.forEach(btn => btn.setAttribute('disabled', ''));
+  } else {
+    const btns = document.querySelectorAll('.recall-choice-btn');
+    btns.forEach(btn => btn.removeAttribute('disabled'));
+  }
 }
 
 function escapeHtml(str) {
